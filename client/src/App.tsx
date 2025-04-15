@@ -1,4 +1,5 @@
-import { Switch, Route } from "wouter";
+import React, { useEffect } from "react";
+import { Switch, Route, useLocation } from "wouter";
 import { Toaster } from "@/components/ui/toaster";
 import NotFound from "@/pages/not-found";
 import AuthPage from "@/pages/auth-page";
@@ -12,19 +13,31 @@ import Profile from "@/pages/profile";
 import Admin from "@/pages/admin";
 import { ProtectedRoute, AdminRoute } from "./lib/protected-route";
 import { AuthProvider } from "./hooks/use-auth";
+import { useAuth } from "@/hooks/use-auth";
 
-function Router() {
+// Create a component to handle routing logic
+function RouterWithAuth() {
+  const { user, isLoading } = useAuth();
+  const [location, setLocation] = useLocation();
+  
+  // Redirect to auth page if not logged in
+  useEffect(() => {
+    if (!isLoading && !user && location !== "/auth") {
+      setLocation("/auth");
+    }
+  }, [user, isLoading, location, setLocation]);
+
   return (
     <Switch>
-      <ProtectedRoute path="/" component={Dashboard} />
+      <Route path="/" component={Dashboard} />
       <Route path="/auth" component={AuthPage} />
-      <ProtectedRoute path="/decks" component={Decks} />
-      <ProtectedRoute path="/create-flashcard" component={CreateFlashcard} />
-      <ProtectedRoute path="/study-deck/:id" component={StudyDeck} />
-      <ProtectedRoute path="/quiz/:type?" component={Quiz} />
-      <ProtectedRoute path="/progress" component={Progress} />
-      <ProtectedRoute path="/profile" component={Profile} />
-      <AdminRoute path="/admin" component={Admin} />
+      <Route path="/decks" component={Decks} />
+      <Route path="/create-flashcard" component={CreateFlashcard} />
+      <Route path="/study-deck/:id" component={StudyDeck} />
+      <Route path="/quiz/:type?" component={Quiz} />
+      <Route path="/progress" component={Progress} />
+      <Route path="/profile" component={Profile} />
+      <Route path="/admin" component={Admin} />
       <Route component={NotFound} />
     </Switch>
   );
@@ -33,7 +46,7 @@ function Router() {
 function App() {
   return (
     <AuthProvider>
-      <Router />
+      <RouterWithAuth />
       <Toaster />
     </AuthProvider>
   );

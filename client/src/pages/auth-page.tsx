@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
@@ -30,14 +30,9 @@ const registerSchema = insertUserSchema.extend({
 export default function AuthPage() {
   const { user, loginMutation, registerMutation } = useAuth();
   const [activeTab, setActiveTab] = useState<"login" | "register">("login");
-  const [, navigate] = useLocation();
+  const [, setLocation] = useLocation();
   
-  // Using useEffect to navigate after successful login
-  useEffect(() => {
-    if (user) {
-      navigate("/");
-    }
-  }, [user, navigate]);
+  // Redirect if user is logged in (handled in App.tsx now)
   
   // Login form
   const loginForm = useForm<z.infer<typeof loginSchema>>({
@@ -61,14 +56,24 @@ export default function AuthPage() {
   
   // Handle login form submission
   const onLoginSubmit = (values: z.infer<typeof loginSchema>) => {
-    loginMutation.mutate(values);
+    loginMutation.mutate(values, {
+      onSuccess: () => {
+        // Redirect to dashboard after successful login
+        setLocation("/");
+      }
+    });
   };
   
   // Handle register form submission
   const onRegisterSubmit = (values: z.infer<typeof registerSchema>) => {
     // Remove confirmPassword before submitting
     const { confirmPassword, ...userData } = values;
-    registerMutation.mutate(userData);
+    registerMutation.mutate(userData, {
+      onSuccess: () => {
+        // Redirect to dashboard after successful registration
+        setLocation("/");
+      }
+    });
   };
   
   return (
