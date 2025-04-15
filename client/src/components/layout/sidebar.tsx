@@ -26,14 +26,12 @@ interface NavItemProps {
 
 const NavItem = ({ href, icon, label, isActive }: NavItemProps) => (
   <li>
-    <Link href={href}>
-      <a className={cn(
-        "flex items-center py-2 px-3 rounded-lg text-neutral-600 hover:bg-neutral-100 transition-colors",
-        isActive && "bg-primary-50 text-primary-600 font-medium"
-      )}>
-        <span className="mr-3 text-lg">{icon}</span>
-        <span>{label}</span>
-      </a>
+    <Link href={href} className={cn(
+      "flex items-center py-2 px-3 rounded-lg text-neutral-600 hover:bg-neutral-100 transition-colors",
+      isActive && "bg-primary-50 text-primary-600 font-medium"
+    )}>
+      <span className="mr-3 text-lg">{icon}</span>
+      <span>{label}</span>
     </Link>
   </li>
 );

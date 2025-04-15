@@ -147,8 +147,8 @@ export default function Dashboard() {
             <div className="mb-8">
               <div className="flex items-center justify-between mb-4">
                 <h2 className="text-xl font-poppins font-semibold">My Decks</h2>
-                <Link href="/decks">
-                  <a className="text-primary text-sm hover:underline">View All</a>
+                <Link href="/decks" className="text-primary text-sm hover:underline">
+                  View All
                 </Link>
               </div>
               
@@ -175,12 +175,12 @@ export default function Dashboard() {
               ) : (
                 <div className="bg-white border border-neutral-200 rounded-xl p-6 text-center">
                   <p className="text-neutral-500 mb-4">You don't have any decks yet. Create your first deck to start learning!</p>
-                  <Link href="/create-flashcard">
-                    <Button>
+                  <Button onClick={() => navigate("/create-flashcard")} asChild>
+                    <Link href="/create-flashcard" className="inline-flex items-center">
                       <Plus size={16} className="mr-2" />
                       Create Your First Deck
-                    </Button>
-                  </Link>
+                    </Link>
+                  </Button>
                 </div>
               )}
             </div>
