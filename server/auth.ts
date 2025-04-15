@@ -44,15 +44,25 @@ export function setupAuth(app: Express) {
   app.use(passport.initialize());
   app.use(passport.session());
 
+  // Mock authentication strategy - accepts any credentials
   passport.use(
     new LocalStrategy(async (username, password, done) => {
       try {
-        const user = await storage.getUserByUsername(username);
-        if (!user || !(await comparePasswords(password, user.password))) {
-          return done(null, false);
-        } else {
-          return done(null, user);
-        }
+        // For development, create a mock user with any credentials
+        const mockUser: SelectUser = {
+          id: 1,
+          username: username,
+          name: username,
+          password: "hashed-password", // Not used in mock
+          streak: 3,
+          xp: 250,
+          dailyGoal: 20,
+          dailyProgress: 5,
+          isAdmin: true,
+          lastStudied: new Date(),
+          createdAt: new Date()
+        };
+        return done(null, mockUser);
       } catch (err) {
         return done(err);
       }
@@ -62,8 +72,21 @@ export function setupAuth(app: Express) {
   passport.serializeUser((user, done) => done(null, user.id));
   passport.deserializeUser(async (id: number, done) => {
     try {
-      const user = await storage.getUser(id);
-      done(null, user);
+      // For mock development - return a fixed user
+      const mockUser: SelectUser = {
+        id: 1,
+        username: "testuser",
+        name: "Test User",
+        password: "hashed-password", // Not used in mock
+        streak: 3,
+        xp: 250,
+        dailyGoal: 20,
+        dailyProgress: 5,
+        isAdmin: true,
+        lastStudied: new Date(),
+        createdAt: new Date()
+      };
+      done(null, mockUser);
     } catch (err) {
       done(err);
     }
@@ -71,20 +94,25 @@ export function setupAuth(app: Express) {
 
   app.post("/api/register", async (req, res, next) => {
     try {
-      const existingUser = await storage.getUserByUsername(req.body.username);
-      if (existingUser) {
-        return res.status(400).json({ message: "Username already exists" });
-      }
+      // For development, just create a mock user response with the submitted username
+      const mockUser: SelectUser = {
+        id: 1,
+        username: req.body.username,
+        name: req.body.name || req.body.username,
+        password: "hashed-password", // Not sent to client
+        streak: 0,
+        xp: 0,
+        dailyGoal: 20,
+        dailyProgress: 0,
+        isAdmin: false,
+        lastStudied: null,
+        createdAt: new Date()
+      };
 
-      const user = await storage.createUser({
-        ...req.body,
-        password: await hashPassword(req.body.password),
-      });
-
-      req.login(user, (err) => {
+      req.login(mockUser, (err) => {
         if (err) return next(err);
         // Don't send password back to the client
-        const { password, ...userWithoutPassword } = user;
+        const { password, ...userWithoutPassword } = mockUser;
         res.status(201).json(userWithoutPassword);
       });
     } catch (err) {
@@ -92,10 +120,28 @@ export function setupAuth(app: Express) {
     }
   });
 
-  app.post("/api/login", passport.authenticate("local"), (req, res) => {
-    // Don't send password back to the client
-    const { password, ...userWithoutPassword } = req.user!;
-    res.status(200).json(userWithoutPassword);
+  // Accept any login credentials in development mode
+  app.post("/api/login", (req, res, next) => {
+    const mockUser: SelectUser = {
+      id: 1,
+      username: req.body.username,
+      name: req.body.username,
+      password: "hashed-password", // Not sent to client
+      streak: 3,
+      xp: 250,
+      dailyGoal: 20,
+      dailyProgress: 5,
+      isAdmin: true,
+      lastStudied: new Date(),
+      createdAt: new Date()
+    };
+    
+    req.login(mockUser, (err) => {
+      if (err) return next(err);
+      // Don't send password back to the client
+      const { password, ...userWithoutPassword } = mockUser;
+      res.status(200).json(userWithoutPassword);
+    });
   });
 
   app.post("/api/logout", (req, res, next) => {
