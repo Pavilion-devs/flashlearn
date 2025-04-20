@@ -9,8 +9,10 @@ import {
 import { supabase } from "./supabase";
 import session from "express-session";
 import connectPg from "connect-pg-simple";
-import { Json } from "@shared/schema";
 import type { PostgrestError } from "@supabase/supabase-js";
+
+// Define Json type since we're using Supabase
+type Json = string | number | boolean | null | { [key: string]: Json } | Json[];
 
 // Define the SessionStore type
 type SessionStore = session.Store;
