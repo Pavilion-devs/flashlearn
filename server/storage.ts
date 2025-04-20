@@ -1,15 +1,19 @@
 import { 
-  users, type User, type InsertUser,
-  decks, type Deck, type InsertDeck,
-  flashcards, type Flashcard, type InsertFlashcard,
-  userFlashcardProgress, type UserFlashcardProgress, type InsertUserFlashcardProgress,
-  quizAttempts, type QuizAttempt, type InsertQuizAttempt,
-  progressStats, type ProgressStat, type InsertProgressStat
+  InsertUser, User, 
+  InsertDeck, Deck,
+  InsertFlashcard, Flashcard,
+  InsertUserFlashcardProgress, UserFlashcardProgress,
+  InsertQuizAttempt, QuizAttempt,
+  InsertProgressStat, ProgressStat
 } from "@shared/schema";
+import { supabase } from "./supabase";
 import session from "express-session";
-import createMemoryStore from "memorystore";
+import connectPg from "connect-pg-simple";
+import { Json } from "@shared/schema";
+import type { PostgrestError } from "@supabase/supabase-js";
 
-const MemoryStore = createMemoryStore(session);
+// Define the SessionStore type
+type SessionStore = session.Store;
 
 export interface IStorage {
   // User methods
@@ -49,311 +53,417 @@ export interface IStorage {
   updateTodayStats(userId: number, data: Partial<InsertProgressStat>): Promise<ProgressStat | undefined>;
   
   // Session store
-  sessionStore: session.SessionStore;
+  sessionStore: SessionStore;
 }
 
-export class MemStorage implements IStorage {
-  private users: Map<number, User>;
-  private decks: Map<number, Deck>;
-  private flashcards: Map<number, Flashcard>;
-  private userFlashcardProgress: Map<string, UserFlashcardProgress>;
-  private quizAttempts: Map<number, QuizAttempt>;
-  private progressStats: Map<number, ProgressStat>;
-  
-  sessionStore: session.SessionStore;
-  
-  private userCurrentId: number;
-  private deckCurrentId: number;
-  private flashcardCurrentId: number;
-  private progressCurrentId: number;
-  private quizAttemptCurrentId: number;
-  private statCurrentId: number;
+// Create a PostgreSQL session store
+const PostgresSessionStore = connectPg(session);
 
+// Helper function to handle Supabase responses
+const handleSupabaseResponse = <T>(response: { data: T | null, error: PostgrestError | null }): T => {
+  if (response.error) {
+    throw new Error(`Supabase error: ${response.error.message}`);
+  }
+  if (!response.data) {
+    throw new Error('No data returned from Supabase');
+  }
+  return response.data;
+};
+
+// Implement the database storage with Supabase
+export class SupabaseStorage implements IStorage {
+  sessionStore: SessionStore;
+  
   constructor() {
-    this.users = new Map();
-    this.decks = new Map();
-    this.flashcards = new Map();
-    this.userFlashcardProgress = new Map();
-    this.quizAttempts = new Map();
-    this.progressStats = new Map();
-    
-    this.userCurrentId = 1;
-    this.deckCurrentId = 1;
-    this.flashcardCurrentId = 1;
-    this.progressCurrentId = 1;
-    this.quizAttemptCurrentId = 1;
-    this.statCurrentId = 1;
-    
-    this.sessionStore = new MemoryStore({
-      checkPeriod: 86400000 // 24 hours
+    this.sessionStore = new PostgresSessionStore({ 
+      conObject: {
+        connectionString: process.env.DATABASE_URL,
+      },
+      createTableIfMissing: true 
     });
   }
-
+  
   // User methods
   async getUser(id: number): Promise<User | undefined> {
-    return this.users.get(id);
+    const { data, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('id', id)
+      .single();
+      
+    if (error || !data) return undefined;
+    return data as User;
   }
-
+  
   async getUserByUsername(username: string): Promise<User | undefined> {
-    return Array.from(this.users.values()).find(
-      (user) => user.username === username,
-    );
+    const { data, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('username', username)
+      .single();
+      
+    if (error || !data) return undefined;
+    return data as User;
   }
-
+  
   async createUser(insertUser: InsertUser): Promise<User> {
-    const id = this.userCurrentId++;
-    const now = new Date();
-    const user: User = { 
-      ...insertUser, 
-      id, 
-      streak: 0, 
-      xp: 0, 
-      dailyGoal: 20, 
-      dailyProgress: 0, 
-      isAdmin: false,
-      lastStudied: null,
-      createdAt: now
-    };
-    this.users.set(id, user);
-    return user;
+    const { data, error } = await supabase
+      .from('users')
+      .insert({
+        ...insertUser,
+        streak: 0,
+        xp: 0,
+        dailyGoal: 10,
+        dailyProgress: 0,
+        isAdmin: false,
+        lastStudied: null,
+        createdAt: new Date().toISOString()
+      })
+      .select()
+      .single();
+      
+    if (error || !data) {
+      throw new Error(`Failed to create user: ${error?.message || 'Unknown error'}`);
+    }
+    
+    return data as User;
   }
   
   async updateUser(id: number, data: Partial<User>): Promise<User | undefined> {
-    const user = this.users.get(id);
-    if (!user) return undefined;
-    
-    const updatedUser = { ...user, ...data };
-    this.users.set(id, updatedUser);
-    return updatedUser;
+    const { data: updatedUser, error } = await supabase
+      .from('users')
+      .update(data)
+      .eq('id', id)
+      .select()
+      .single();
+      
+    if (error || !updatedUser) return undefined;
+    return updatedUser as User;
   }
   
   // Deck methods
   async createDeck(deck: InsertDeck): Promise<Deck> {
-    const id = this.deckCurrentId++;
-    const now = new Date();
-    const newDeck: Deck = { 
-      ...deck, 
-      id, 
-      cardCount: 0, 
-      createdAt: now
-    };
-    this.decks.set(id, newDeck);
-    return newDeck;
+    const { data, error } = await supabase
+      .from('decks')
+      .insert({
+        ...deck,
+        cardCount: 0,
+        createdAt: new Date().toISOString()
+      })
+      .select()
+      .single();
+      
+    if (error || !data) {
+      throw new Error(`Failed to create deck: ${error?.message || 'Unknown error'}`);
+    }
+    
+    return data as Deck;
   }
   
   async getDeck(id: number): Promise<Deck | undefined> {
-    return this.decks.get(id);
+    const { data, error } = await supabase
+      .from('decks')
+      .select('*')
+      .eq('id', id)
+      .single();
+      
+    if (error || !data) return undefined;
+    return data as Deck;
   }
   
   async getDecksByUserId(userId: number): Promise<Deck[]> {
-    return Array.from(this.decks.values()).filter(deck => deck.userId === userId);
+    const { data, error } = await supabase
+      .from('decks')
+      .select('*')
+      .eq('userId', userId);
+      
+    if (error || !data) return [];
+    return data as Deck[];
   }
   
   async getPublicDecks(): Promise<Deck[]> {
-    return Array.from(this.decks.values()).filter(deck => deck.isPublic);
+    const { data, error } = await supabase
+      .from('decks')
+      .select('*')
+      .eq('isPublic', true);
+      
+    if (error || !data) return [];
+    return data as Deck[];
   }
   
   async updateDeck(id: number, data: Partial<Deck>): Promise<Deck | undefined> {
-    const deck = this.decks.get(id);
-    if (!deck) return undefined;
-    
-    const updatedDeck = { ...deck, ...data };
-    this.decks.set(id, updatedDeck);
-    return updatedDeck;
+    const { data: updatedDeck, error } = await supabase
+      .from('decks')
+      .update(data)
+      .eq('id', id)
+      .select()
+      .single();
+      
+    if (error || !updatedDeck) return undefined;
+    return updatedDeck as Deck;
   }
   
   async deleteDeck(id: number): Promise<boolean> {
-    // Delete associated flashcards first
-    const deckFlashcards = await this.getFlashcardsByDeckId(id);
-    for (const flashcard of deckFlashcards) {
-      await this.deleteFlashcard(flashcard.id);
-    }
-    
-    return this.decks.delete(id);
+    const { error } = await supabase
+      .from('decks')
+      .delete()
+      .eq('id', id);
+      
+    return !error;
   }
   
   // Flashcard methods
   async createFlashcard(flashcard: InsertFlashcard): Promise<Flashcard> {
-    const id = this.flashcardCurrentId++;
-    const now = new Date();
-    const newFlashcard: Flashcard = { ...flashcard, id, createdAt: now };
-    this.flashcards.set(id, newFlashcard);
-    
-    // Update card count in deck
-    const deck = this.decks.get(flashcard.deckId);
-    if (deck) {
-      this.decks.set(deck.id, { ...deck, cardCount: deck.cardCount + 1 });
+    // First insert the flashcard
+    const { data, error } = await supabase
+      .from('flashcards')
+      .insert({
+        ...flashcard,
+        createdAt: new Date().toISOString()
+      })
+      .select()
+      .single();
+      
+    if (error || !data) {
+      throw new Error(`Failed to create flashcard: ${error?.message || 'Unknown error'}`);
     }
     
-    return newFlashcard;
+    // Then update the deck card count
+    await supabase.rpc('increment_deck_card_count', { deck_id: flashcard.deckId });
+    
+    return data as Flashcard;
   }
   
   async getFlashcard(id: number): Promise<Flashcard | undefined> {
-    return this.flashcards.get(id);
+    const { data, error } = await supabase
+      .from('flashcards')
+      .select('*')
+      .eq('id', id)
+      .single();
+      
+    if (error || !data) return undefined;
+    return data as Flashcard;
   }
   
   async getFlashcardsByDeckId(deckId: number): Promise<Flashcard[]> {
-    return Array.from(this.flashcards.values()).filter(
-      flashcard => flashcard.deckId === deckId
-    );
+    const { data, error } = await supabase
+      .from('flashcards')
+      .select('*')
+      .eq('deckId', deckId);
+      
+    if (error || !data) return [];
+    return data as Flashcard[];
   }
   
   async updateFlashcard(id: number, data: Partial<Flashcard>): Promise<Flashcard | undefined> {
-    const flashcard = this.flashcards.get(id);
-    if (!flashcard) return undefined;
-    
-    const updatedFlashcard = { ...flashcard, ...data };
-    this.flashcards.set(id, updatedFlashcard);
-    return updatedFlashcard;
+    const { data: updatedFlashcard, error } = await supabase
+      .from('flashcards')
+      .update(data)
+      .eq('id', id)
+      .select()
+      .single();
+      
+    if (error || !updatedFlashcard) return undefined;
+    return updatedFlashcard as Flashcard;
   }
   
   async deleteFlashcard(id: number): Promise<boolean> {
-    const flashcard = this.flashcards.get(id);
-    if (!flashcard) return false;
+    // First get the flashcard to know its deck
+    const { data: flashcard, error: getError } = await supabase
+      .from('flashcards')
+      .select('deckId')
+      .eq('id', id)
+      .single();
+      
+    if (getError || !flashcard) return false;
     
-    // Update card count in deck
-    const deck = this.decks.get(flashcard.deckId);
-    if (deck) {
-      this.decks.set(deck.id, { ...deck, cardCount: Math.max(0, deck.cardCount - 1) });
-    }
+    // Delete the flashcard
+    const { error } = await supabase
+      .from('flashcards')
+      .delete()
+      .eq('id', id);
+      
+    if (error) return false;
     
-    // Also delete any progress associated with this flashcard
-    for (const [key, progress] of this.userFlashcardProgress.entries()) {
-      if (progress.flashcardId === id) {
-        this.userFlashcardProgress.delete(key);
-      }
-    }
+    // Update the deck card count
+    await supabase.rpc('decrement_deck_card_count', { deck_id: flashcard.deckId });
     
-    return this.flashcards.delete(id);
+    return true;
   }
   
   // Progress methods
   async createUserFlashcardProgress(progress: InsertUserFlashcardProgress): Promise<UserFlashcardProgress> {
-    const id = this.progressCurrentId++;
-    const key = `${progress.userId}-${progress.flashcardId}`;
-    const newProgress: UserFlashcardProgress = { ...progress, id, repetitions: 0 };
-    this.userFlashcardProgress.set(key, newProgress);
-    return newProgress;
+    const { data, error } = await supabase
+      .from('user_flashcard_progress')
+      .insert({
+        ...progress,
+        repetitions: 0,
+        lastReviewed: new Date().toISOString()
+      })
+      .select()
+      .single();
+      
+    if (error || !data) {
+      throw new Error(`Failed to create progress: ${error?.message || 'Unknown error'}`);
+    }
+    
+    return data as UserFlashcardProgress;
   }
   
   async getUserFlashcardProgress(userId: number, flashcardId: number): Promise<UserFlashcardProgress | undefined> {
-    const key = `${userId}-${flashcardId}`;
-    return this.userFlashcardProgress.get(key);
+    const { data, error } = await supabase
+      .from('user_flashcard_progress')
+      .select('*')
+      .eq('userId', userId)
+      .eq('flashcardId', flashcardId)
+      .single();
+      
+    if (error || !data) return undefined;
+    return data as UserFlashcardProgress;
   }
   
   async getDueFlashcards(userId: number): Promise<{ flashcard: Flashcard, progress: UserFlashcardProgress }[]> {
-    const now = new Date();
-    const results: { flashcard: Flashcard, progress: UserFlashcardProgress }[] = [];
+    const now = new Date().toISOString();
     
-    // Get all progress entries for this user
-    const userProgress = Array.from(this.userFlashcardProgress.values())
-      .filter(progress => progress.userId === userId);
+    const { data, error } = await supabase
+      .from('user_flashcard_progress')
+      .select(`
+        *,
+        flashcard:flashcards(*)
+      `)
+      .eq('userId', userId)
+      .lte('nextReview', now);
+      
+    if (error || !data) return [];
     
-    // Filter those that are due for review
-    for (const progress of userProgress) {
-      if (!progress.nextReview || progress.nextReview <= now) {
-        const flashcard = this.flashcards.get(progress.flashcardId);
-        if (flashcard) {
-          results.push({ flashcard, progress });
-        }
-      }
-    }
-    
-    return results;
+    return data.map(item => ({
+      progress: {
+        id: item.id,
+        userId: item.userId,
+        flashcardId: item.flashcardId,
+        eFactor: item.eFactor,
+        interval: item.interval,
+        repetitions: item.repetitions,
+        nextReview: item.nextReview ? new Date(item.nextReview) : null,
+        lastReviewed: item.lastReviewed ? new Date(item.lastReviewed) : null
+      } as UserFlashcardProgress,
+      flashcard: item.flashcard as Flashcard
+    }));
   }
   
   async updateUserFlashcardProgress(id: number, data: Partial<UserFlashcardProgress>): Promise<UserFlashcardProgress | undefined> {
-    // Find the progress entry by id
-    let foundProgress: UserFlashcardProgress | undefined;
-    let foundKey: string | undefined;
-    
-    for (const [key, progress] of this.userFlashcardProgress.entries()) {
-      if (progress.id === id) {
-        foundProgress = progress;
-        foundKey = key;
-        break;
-      }
-    }
-    
-    if (!foundProgress || !foundKey) return undefined;
-    
-    const updatedProgress = { ...foundProgress, ...data };
-    this.userFlashcardProgress.set(foundKey, updatedProgress);
-    return updatedProgress;
+    const { data: updatedProgress, error } = await supabase
+      .from('user_flashcard_progress')
+      .update(data)
+      .eq('id', id)
+      .select()
+      .single();
+      
+    if (error || !updatedProgress) return undefined;
+    return updatedProgress as UserFlashcardProgress;
   }
   
   // Quiz methods
   async createQuizAttempt(attempt: InsertQuizAttempt): Promise<QuizAttempt> {
-    const id = this.quizAttemptCurrentId++;
-    const now = new Date();
-    const newAttempt: QuizAttempt = { ...attempt, id, date: now };
-    this.quizAttempts.set(id, newAttempt);
-    return newAttempt;
+    const { data, error } = await supabase
+      .from('quiz_attempts')
+      .insert({
+        ...attempt,
+        date: new Date().toISOString()
+      })
+      .select()
+      .single();
+      
+    if (error || !data) {
+      throw new Error(`Failed to create quiz attempt: ${error?.message || 'Unknown error'}`);
+    }
+    
+    return data as QuizAttempt;
   }
   
   async getQuizAttemptsByUserId(userId: number): Promise<QuizAttempt[]> {
-    return Array.from(this.quizAttempts.values())
-      .filter(attempt => attempt.userId === userId)
-      .sort((a, b) => b.date.getTime() - a.date.getTime()); // Sort by date desc
+    const { data, error } = await supabase
+      .from('quiz_attempts')
+      .select('*')
+      .eq('userId', userId)
+      .order('date', { ascending: false });
+      
+    if (error || !data) return [];
+    return data as QuizAttempt[];
   }
   
   // Stats methods
   async createProgressStat(stat: InsertProgressStat): Promise<ProgressStat> {
-    const id = this.statCurrentId++;
-    const now = new Date();
-    const newStat: ProgressStat = { ...stat, id, date: now };
-    this.progressStats.set(id, newStat);
-    return newStat;
+    const { data, error } = await supabase
+      .from('progress_stats')
+      .insert({
+        ...stat,
+        date: new Date().toISOString()
+      })
+      .select()
+      .single();
+      
+    if (error || !data) {
+      throw new Error(`Failed to create progress stat: ${error?.message || 'Unknown error'}`);
+    }
+    
+    return data as ProgressStat;
   }
   
   async getUserStats(userId: number): Promise<ProgressStat[]> {
-    return Array.from(this.progressStats.values())
-      .filter(stat => stat.userId === userId)
-      .sort((a, b) => b.date.getTime() - a.date.getTime()); // Sort by date desc
+    const { data, error } = await supabase
+      .from('progress_stats')
+      .select('*')
+      .eq('userId', userId)
+      .order('date', { ascending: false });
+      
+    if (error || !data) return [];
+    return data as ProgressStat[];
   }
   
   async updateTodayStats(userId: number, data: Partial<InsertProgressStat>): Promise<ProgressStat | undefined> {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    // Format today's date for comparison (YYYY-MM-DD)
+    const today = new Date().toISOString().split('T')[0];
     
-    // Find today's stat entry for the user
-    let todayStat: ProgressStat | undefined;
+    // Try to find today's stat
+    const { data: existingStats, error: findError } = await supabase
+      .from('progress_stats')
+      .select('*')
+      .eq('userId', userId)
+      .filter('date', 'gte', `${today}T00:00:00`)
+      .filter('date', 'lte', `${today}T23:59:59`);
     
-    for (const stat of this.progressStats.values()) {
-      if (stat.userId === userId) {
-        const statDate = new Date(stat.date);
-        statDate.setHours(0, 0, 0, 0);
+    if (findError) return undefined;
+    
+    const todayStat = existingStats && existingStats.length > 0 ? existingStats[0] : null;
+    
+    if (todayStat) {
+      // Update existing stat
+      const updates = {
+        cardsReviewed: (todayStat.cardsReviewed || 0) + (data.cardsReviewed || 0),
+        xpEarned: (todayStat.xpEarned || 0) + (data.xpEarned || 0),
+        timeSpent: (todayStat.timeSpent || 0) + (data.timeSpent || 0),
+        accuracy: data.accuracy || todayStat.accuracy
+      };
+      
+      const { data: updatedStat, error: updateError } = await supabase
+        .from('progress_stats')
+        .update(updates)
+        .eq('id', todayStat.id)
+        .select()
+        .single();
         
-        if (statDate.getTime() === today.getTime()) {
-          todayStat = stat;
-          break;
-        }
-      }
-    }
-    
-    // If no entry exists for today, create one
-    if (!todayStat) {
+      if (updateError || !updatedStat) return undefined;
+      return updatedStat as ProgressStat;
+    } else {
+      // Create new stat
       return this.createProgressStat({
         userId,
-        cardsReviewed: data.cardsReviewed || 0,
-        xpEarned: data.xpEarned || 0,
-        timeSpent: data.timeSpent || 0,
-        accuracy: data.accuracy || {}
+        ...data
       });
     }
-    
-    // Update the existing entry
-    const updatedStat: ProgressStat = {
-      ...todayStat,
-      cardsReviewed: (todayStat.cardsReviewed || 0) + (data.cardsReviewed || 0),
-      xpEarned: (todayStat.xpEarned || 0) + (data.xpEarned || 0),
-      timeSpent: (todayStat.timeSpent || 0) + (data.timeSpent || 0),
-      accuracy: { ...todayStat.accuracy, ...data.accuracy }
-    };
-    
-    this.progressStats.set(todayStat.id, updatedStat);
-    return updatedStat;
   }
 }
 
-export const storage = new MemStorage();
+// Create and export a storage instance
+export const storage = new SupabaseStorage();
