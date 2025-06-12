@@ -3,7 +3,7 @@ import { Link } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
-import { Deck } from "@shared/schema";
+import { Deck } from "@shared/types";
 import { Sidebar } from "@/components/layout/sidebar";
 import { MobileHeader } from "@/components/layout/header";
 import { MobileNav } from "@/components/layout/mobile-nav";
@@ -15,6 +15,10 @@ import { PracticeCard } from "@/components/dashboard/practice-card";
 import { Button } from "@/components/ui/button";
 import { Play, Plus } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Progress } from "@/components/ui/progress";
+import { Badge } from "@/components/ui/badge";
+import { ProtectedRoute } from "@/lib/protected-route";
 
 export default function Dashboard() {
   const { user } = useAuth();
@@ -98,7 +102,7 @@ export default function Dashboard() {
         <Sidebar />
         
         <main className="flex-1 overflow-y-auto p-4 md:p-6 bg-neutral-50 pb-16 md:pb-6">
-          <div className="max-w-6xl mx-auto">
+          <div className="mx-auto">
             <div className="flex flex-col md:flex-row md:items-center md:justify-between mb-6">
               <div>
                 <h1 className="text-2xl md:text-3xl font-poppins font-semibold mb-1">
@@ -129,10 +133,10 @@ export default function Dashboard() {
                 <Skeleton className="h-48 w-full rounded-xl" />
               ) : (
                 <ProgressCard 
-                  flashcards={`${user?.dailyProgress || 0}/${user?.dailyGoal || 20}`}
+                  flashcards={`${user?.daily_progress || 0}/${user?.daily_goal || 20}`}
                   xp={stats && stats.length > 0 ? `${stats[0].xpEarned || 0}/200` : "0/200"}
                   quizScore="85%"
-                  percentDone={user?.dailyGoal ? Math.round((user.dailyProgress / user.dailyGoal) * 100) : 0}
+                  percentDone={user?.daily_goal ? Math.round((user.daily_progress / user.daily_goal) * 100) : 0}
                 />
               )}
               
@@ -166,9 +170,9 @@ export default function Dashboard() {
                       id={deck.id}
                       name={deck.name}
                       description={deck.description || ""}
-                      cardCount={deck.cardCount || 0}
+                      cardCount={deck.card_count || 0}
                       color={deck.color || "primary"}
-                      lastStudied={deck.lastStudied ? "Last studied yesterday" : "Not studied yet"}
+                      lastStudied="Not studied yet"
                     />
                   ))}
                 </div>

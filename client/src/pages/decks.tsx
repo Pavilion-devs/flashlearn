@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { Link } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { Deck } from "@shared/schema";
+import { Deck } from "@shared/types";
 import { Sidebar } from "@/components/layout/sidebar";
 import { MobileHeader } from "@/components/layout/header";
 import { MobileNav } from "@/components/layout/mobile-nav";
@@ -34,7 +34,6 @@ import { useToast } from "@/hooks/use-toast";
 import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { insertDeckSchema } from "@shared/schema";
 import { z } from "zod";
 import { 
   Plus, 
@@ -50,15 +49,33 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { useAuth } from "@/hooks/use-auth";
+import { ProtectedRoute } from "@/lib/protected-route";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Badge } from "@/components/ui/badge";
 
-// Extend the insertDeckSchema with custom validation
-const deckFormSchema = insertDeckSchema
-  .omit({ userId: true })
-  .extend({
-    color: z.enum(["primary", "secondary", "accent"]).default("primary"),
-  });
+// Basic deck validation schema
+const deckFormSchema = z.object({
+  name: z.string().min(1, "Deck name is required"),
+  description: z.string().optional(),
+  color: z.enum(["primary", "secondary", "accent"]).default("primary"),
+  is_public: z.boolean().default(false),
+});
 
 type DeckFormValues = z.infer<typeof deckFormSchema>;
+
+// Basic deck validation
+const validateDeck = (deck: any) => {
+  if (!deck.name || deck.name.trim().length === 0) {
+    throw new Error("Deck name is required");
+  }
+  if (deck.name.length > 100) {
+    throw new Error("Deck name must be less than 100 characters");
+  }
+  return true;
+};
 
 export default function Decks() {
   const { toast } = useToast();
@@ -75,13 +92,6 @@ export default function Decks() {
     refetch: refetchDecks
   } = useQuery<Deck[]>({
     queryKey: ["/api/decks"],
-    queryFn: async ({ queryKey }) => {
-      const res = await fetch(queryKey[0] as string, {
-        credentials: "include",
-      });
-      if (!res.ok) throw new Error("Failed to fetch decks");
-      return await res.json();
-    },
   });
   
   // Fetch public decks
@@ -91,13 +101,6 @@ export default function Decks() {
     refetch: refetchPublicDecks
   } = useQuery<Deck[]>({
     queryKey: ["/api/decks/public"],
-    queryFn: async ({ queryKey }) => {
-      const res = await fetch(queryKey[0] as string, {
-        credentials: "include",
-      });
-      if (!res.ok) throw new Error("Failed to fetch public decks");
-      return await res.json();
-    },
   });
   
   // Create deck form
@@ -107,7 +110,7 @@ export default function Decks() {
       name: "",
       description: "",
       color: "primary",
-      isPublic: false,
+      is_public: false,
     },
   });
   
@@ -118,7 +121,7 @@ export default function Decks() {
       name: "",
       description: "",
       color: "primary",
-      isPublic: false,
+      is_public: false,
     },
   });
   
@@ -129,7 +132,7 @@ export default function Decks() {
         name: editingDeck.name,
         description: editingDeck.description || "",
         color: editingDeck.color as "primary" | "secondary" | "accent" || "primary",
-        isPublic: editingDeck.isPublic,
+        is_public: editingDeck.is_public,
       });
     }
   }, [editingDeck, editForm]);
@@ -240,7 +243,7 @@ export default function Decks() {
         <Sidebar />
         
         <main className="flex-1 overflow-y-auto p-4 md:p-6 bg-neutral-50 pb-16 md:pb-6">
-          <div className="max-w-6xl mx-auto">
+          <div className="mx-auto">
             <div className="flex flex-col md:flex-row md:items-center md:justify-between mb-6">
               <div>
                 <h1 className="text-2xl md:text-3xl font-poppins font-semibold mb-1">
@@ -322,7 +325,7 @@ export default function Decks() {
                         
                         <FormField
                           control={createForm.control}
-                          name="isPublic"
+                          name="is_public"
                           render={({ field }) => (
                             <FormItem className="flex flex-row items-center justify-between rounded-lg border p-3">
                               <div className="space-y-0.5">
@@ -402,10 +405,10 @@ export default function Decks() {
                           id={deck.id}
                           name={deck.name}
                           description={deck.description || ""}
-                          cardCount={deck.cardCount || 0}
+                          cardCount={deck.card_count || 0}
                           color={deck.color || "primary"}
-                          lastStudied={deck.lastStudied ? "Last studied yesterday" : "Not studied yet"}
-                          status={deck.isPublic ? "Public" : undefined}
+                          lastStudied="Not studied yet"
+                          status={deck.is_public ? "Public" : undefined}
                         />
                         <div className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity">
                           <div className="flex space-x-1">
@@ -465,7 +468,7 @@ export default function Decks() {
                         id={deck.id}
                         name={deck.name}
                         description={deck.description || ""}
-                        cardCount={deck.cardCount || 0}
+                        cardCount={deck.card_count || 0}
                         color={deck.color || "primary"}
                         lastStudied="Public deck"
                       />
@@ -560,7 +563,7 @@ export default function Decks() {
               
               <FormField
                 control={editForm.control}
-                name="isPublic"
+                name="is_public"
                 render={({ field }) => (
                   <FormItem className="flex flex-row items-center justify-between rounded-lg border p-3">
                     <div className="space-y-0.5">

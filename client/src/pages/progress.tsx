@@ -185,7 +185,7 @@ export default function Progress() {
         <Sidebar />
         
         <main className="flex-1 overflow-y-auto p-4 md:p-6 bg-neutral-50 pb-16 md:pb-6">
-          <div className="max-w-6xl mx-auto">
+          <div className="mx-auto">
             <div className="flex flex-col md:flex-row md:items-center md:justify-between mb-6">
               <div>
                 <h1 className="text-2xl md:text-3xl font-poppins font-semibold mb-1">

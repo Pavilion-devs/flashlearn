@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { useParams, useLocation } from "wouter";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { Sidebar } from "@/components/layout/sidebar";
 import { MobileHeader } from "@/components/layout/header";
 import { MobileNav } from "@/components/layout/mobile-nav";
@@ -29,8 +29,13 @@ import {
   TypingQuizIcon, 
   ListeningQuizIcon 
 } from "@/components/icons";
-import { Deck } from "@shared/schema";
+import { Deck } from "@shared/types";
 import { Loader2, ArrowLeft, BookOpen, Play } from "lucide-react";
+import { Progress } from "@/components/ui/progress";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
+import { CheckCircle, XCircle, Clock, PlayCircle, Volume2, RotateCcw } from "lucide-react";
 
 type QuizType = "multiple-choice" | "typing" | "listening";
 
@@ -80,19 +85,19 @@ const generateQuizQuestions = (
     case "typing":
       return limitedCards.map(card => ({
         id: card.id,
-        question: `Translate to ${card.partOfSpeech ? `${card.partOfSpeech}: ` : ""}${card.front}`,
+        question: `Translate to ${card.part_of_speech ? `${card.part_of_speech}: ` : ""}${card.front}`,
         correctAnswer: card.back,
-        hint: card.exampleSentence
+        hint: card.example_sentence
       }));
       
     case "listening":
       return limitedCards
-        .filter(card => card.audioUrl) // Only include cards with audio
+        .filter(card => card.audio_url) // Only include cards with audio
         .map(card => ({
           id: card.id,
-          audioUrl: card.audioUrl,
+          audio_url: card.audio_url,
           correctAnswer: card.front,
-          maxPlays: 3
+          max_plays: 3
         }));
       
     default:
@@ -201,7 +206,7 @@ export default function Quiz() {
         // Only show listening quiz if there are cards with audio
         if (questions.length === 0) {
           return (
-            <Card className="max-w-2xl mx-auto">
+            <Card className="mx-auto">
               <CardContent className="p-6 text-center">
                 <h2 className="text-xl font-semibold mb-2">No Audio Flashcards</h2>
                 <p className="text-neutral-500 mb-4">
@@ -251,7 +256,7 @@ export default function Quiz() {
       <div className="flex flex-1 overflow-hidden">
         <Sidebar />
         <main className="flex-1 overflow-y-auto p-4 md:p-6 bg-neutral-50 pb-16 md:pb-6">
-          <div className="max-w-4xl mx-auto">
+          <div className="mx-auto">
             <div className="mb-6">
               <h1 className="text-2xl md:text-3xl font-poppins font-semibold mb-1">
                 Quiz Practice
@@ -344,7 +349,7 @@ export default function Quiz() {
                       <SelectContent>
                         {decks.map((deck) => (
                           <SelectItem key={deck.id} value={deck.id.toString()}>
-                            {deck.name} ({deck.cardCount} cards)
+                            {deck.name} ({deck.card_count} cards)
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -366,9 +371,18 @@ export default function Quiz() {
                   <div className="bg-muted/10 p-4 rounded-md border border-border">
                     <div className="flex items-center justify-between mb-2">
                       <h3 className="font-medium">{selectedDeck.name}</h3>
-                      <span className="text-xs px-2 py-1 bg-neutral-100 text-neutral-600 rounded-full">
-                        {selectedDeck.cardCount || 0} cards
-                      </span>
+                      <div className="flex items-center space-x-4 text-sm text-neutral-600">
+                        <div className="flex items-center space-x-1">
+                          <BookOpen size={16} />
+                          <span>{selectedDeck.card_count} cards</span>
+                        </div>
+                        
+                        <div className="ml-auto">
+                          <Badge variant="secondary" className="capitalize">
+                            {activeTab.replace('-', ' ')}
+                          </Badge>
+                        </div>
+                      </div>
                     </div>
                     {selectedDeck.description && (
                       <p className="text-sm text-neutral-500 mb-2">{selectedDeck.description}</p>
@@ -381,7 +395,7 @@ export default function Quiz() {
                     ) : flashcards && flashcards.length > 0 ? (
                       <p className="text-sm text-neutral-500">
                         {activeTab === "listening" && 
-                          flashcards.filter((card: any) => card.audioUrl).length === 0 ? (
+                          flashcards.filter((card: any) => card.audio_url).length === 0 ? (
                           <span className="text-secondary-400">
                             This deck doesn't have any cards with audio for the listening quiz.
                           </span>
@@ -410,7 +424,7 @@ export default function Quiz() {
                     !flashcards || 
                     flashcards.length === 0 ||
                     (activeTab === "listening" && 
-                     flashcards.filter((card: any) => card.audioUrl).length === 0)
+                     flashcards.filter((card: any) => card.audio_url).length === 0)
                   }
                 >
                   <Play size={16} className="mr-2" />

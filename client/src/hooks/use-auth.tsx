@@ -1,42 +1,86 @@
-import { createContext, ReactNode, useContext } from "react";
+import { createContext, ReactNode, useContext, useEffect, useState } from "react";
 import {
   useQuery,
   useMutation,
   UseMutationResult,
 } from "@tanstack/react-query";
-import { insertUserSchema, User as SelectUser, InsertUser } from "@shared/schema";
-import { getQueryFn, apiRequest, queryClient } from "../lib/queryClient";
+import { User } from "@shared/types";
+import { apiRequest, queryClient } from "../lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { supabase } from "../lib/supabase";
+import { Session, User as SupabaseUser } from "@supabase/supabase-js";
 
-type AuthContextType = {
-  user: SelectUser | null;
-  isLoading: boolean;
-  error: Error | null;
-  loginMutation: UseMutationResult<SelectUser, Error, LoginData>;
-  logoutMutation: UseMutationResult<void, Error, void>;
-  registerMutation: UseMutationResult<SelectUser, Error, InsertUser>;
+type LoginData = {
+  email: string;
+  password: string;
 };
 
-type LoginData = Pick<InsertUser, "username" | "password">;
+type RegisterData = {
+  username: string;
+  email: string;
+  password: string;
+};
 
-export const AuthContext = createContext<AuthContextType | null>(null);
+type AuthContextType = {
+  user: User | null;
+  isLoading: boolean;
+  error: Error | null;
+  loginMutation: UseMutationResult<User, Error, LoginData>;
+  logoutMutation: UseMutationResult<void, Error, void>;
+  registerMutation: UseMutationResult<User, Error, RegisterData>;
+};
+
+const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const { toast } = useToast();
+  
+  // Custom query function that includes the auth token
+  const getUser = async () => {
+    const token = localStorage.getItem('supabase_token');
+    if (!token) return null;
+    
+    const res = await fetch('/api/user', {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+    });
+    
+    if (!res.ok) {
+      if (res.status === 401) {
+        localStorage.removeItem('supabase_token');
+        return null;
+      }
+      throw new Error('Failed to fetch user');
+    }
+    
+    return await res.json();
+  };
+
   const {
     data: user,
     error,
     isLoading,
-  } = useQuery<SelectUser | null>({
+  } = useQuery<User | null>({
     queryKey: ["/api/user"],
-    queryFn: getQueryFn({ on401: "returnNull" }),
+    queryFn: getUser,
+    retry: false,
   });
 
   const loginMutation = useMutation({
     mutationFn: async (credentials: LoginData) => {
       const res = await apiRequest("POST", "/api/login", credentials);
-      return await res.json();
+      const data = await res.json();
+      
+      // Store the actual Supabase session token
+      if (data.session?.access_token) {
+        localStorage.setItem('supabase_token', data.session.access_token);
+      }
+      
+      return data;
     },
-    onSuccess: (user: SelectUser) => {
+    onSuccess: (user: User) => {
       queryClient.setQueryData(["/api/user"], user);
       toast({
         title: "Login successful",
@@ -46,19 +90,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     onError: (error: Error) => {
       toast({
         title: "Login failed",
-        description: "Invalid username or password",
+        description: "Invalid email or password",
         variant: "destructive",
       });
     },
   });
 
   const registerMutation = useMutation({
-    mutationFn: async (credentials: InsertUser) => {
+    mutationFn: async (credentials: RegisterData) => {
       const res = await apiRequest("POST", "/api/register", credentials);
-      return await res.json();
+      const data = await res.json();
+      
+      // Store the actual Supabase session token
+      if (data.session?.access_token) {
+        localStorage.setItem('supabase_token', data.session.access_token);
+      }
+      
+      return data;
     },
-    onSuccess: (user: SelectUser) => {
+    onSuccess: (user: User) => {
+      // Set the user data in cache and invalidate to refetch
       queryClient.setQueryData(["/api/user"], user);
+      queryClient.invalidateQueries({ queryKey: ["/api/user"] });
       toast({
         title: "Registration successful",
         description: `Welcome to FlashLearn, ${user.name || user.username}!`,
@@ -67,7 +120,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     onError: (error: Error) => {
       toast({
         title: "Registration failed",
-        description: "Username already exists or invalid data",
+        description: "Email already exists or invalid data",
         variant: "destructive",
       });
     },
@@ -75,7 +128,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logoutMutation = useMutation({
     mutationFn: async () => {
-      await apiRequest("POST", "/api/logout");
+      const token = localStorage.getItem('supabase_token');
+      if (token) {
+        await fetch('/api/logout', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        });
+      }
+      localStorage.removeItem('supabase_token');
     },
     onSuccess: () => {
       queryClient.setQueryData(["/api/user"], null);
@@ -111,7 +174,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
 export function useAuth() {
   const context = useContext(AuthContext);
-  if (!context) {
+  if (context === undefined) {
     throw new Error("useAuth must be used within an AuthProvider");
   }
   return context;

@@ -5,11 +5,10 @@ import {
   InsertUserFlashcardProgress, UserFlashcardProgress,
   InsertQuizAttempt, QuizAttempt,
   InsertProgressStat, ProgressStat
-} from "@shared/schema";
+} from "@shared/types";
 import { supabase } from "./supabase";
 import session from "express-session";
-import connectPg from "connect-pg-simple";
-import type { PostgrestError } from "@supabase/supabase-js";
+import MemoryStore from "memorystore";
 
 // Define Json type since we're using Supabase
 type Json = string | number | boolean | null | { [key: string]: Json } | Json[];
@@ -19,15 +18,15 @@ type SessionStore = session.Store;
 
 export interface IStorage {
   // User methods
-  getUser(id: number): Promise<User | undefined>;
+  getUser(id: string): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
-  updateUser(id: number, data: Partial<User>): Promise<User | undefined>;
+  updateUser(id: string, data: Partial<User>): Promise<User | undefined>;
   
   // Deck methods
   createDeck(deck: InsertDeck): Promise<Deck>;
   getDeck(id: number): Promise<Deck | undefined>;
-  getDecksByUserId(userId: number): Promise<Deck[]>;
+  getDecksByUserId(userId: string): Promise<Deck[]>;
   getPublicDecks(): Promise<Deck[]>;
   updateDeck(id: number, data: Partial<Deck>): Promise<Deck | undefined>;
   deleteDeck(id: number): Promise<boolean>;
@@ -41,52 +40,38 @@ export interface IStorage {
   
   // Progress methods
   createUserFlashcardProgress(progress: InsertUserFlashcardProgress): Promise<UserFlashcardProgress>;
-  getUserFlashcardProgress(userId: number, flashcardId: number): Promise<UserFlashcardProgress | undefined>;
-  getDueFlashcards(userId: number): Promise<{ flashcard: Flashcard, progress: UserFlashcardProgress }[]>;
+  getUserFlashcardProgress(userId: string, flashcardId: number): Promise<UserFlashcardProgress | undefined>;
+  getDueFlashcards(userId: string): Promise<{ flashcard: Flashcard, progress: UserFlashcardProgress }[]>;
   updateUserFlashcardProgress(id: number, data: Partial<UserFlashcardProgress>): Promise<UserFlashcardProgress | undefined>;
   
   // Quiz methods
   createQuizAttempt(attempt: InsertQuizAttempt): Promise<QuizAttempt>;
-  getQuizAttemptsByUserId(userId: number): Promise<QuizAttempt[]>;
+  getQuizAttemptsByUserId(userId: string): Promise<QuizAttempt[]>;
   
   // Stats methods
   createProgressStat(stat: InsertProgressStat): Promise<ProgressStat>;
-  getUserStats(userId: number): Promise<ProgressStat[]>;
-  updateTodayStats(userId: number, data: Partial<InsertProgressStat>): Promise<ProgressStat | undefined>;
+  getUserStats(userId: string): Promise<ProgressStat[]>;
+  updateTodayStats(userId: string, data: Partial<InsertProgressStat>): Promise<ProgressStat | undefined>;
   
   // Session store
   sessionStore: SessionStore;
 }
 
-// Create a PostgreSQL session store
-const PostgresSessionStore = connectPg(session);
+// Create a memory session store
+const MemorySessionStore = MemoryStore(session);
 
-// Helper function to handle Supabase responses
-const handleSupabaseResponse = <T>(response: { data: T | null, error: PostgrestError | null }): T => {
-  if (response.error) {
-    throw new Error(`Supabase error: ${response.error.message}`);
-  }
-  if (!response.data) {
-    throw new Error('No data returned from Supabase');
-  }
-  return response.data;
-};
-
-// Implement the database storage with Supabase
+// Implement real Supabase storage
 export class SupabaseStorage implements IStorage {
   sessionStore: SessionStore;
   
   constructor() {
-    this.sessionStore = new PostgresSessionStore({ 
-      conObject: {
-        connectionString: process.env.DATABASE_URL,
-      },
-      createTableIfMissing: true 
+    this.sessionStore = new MemorySessionStore({
+      checkPeriod: 86400000 // prune expired entries every 24h
     });
   }
   
   // User methods
-  async getUser(id: number): Promise<User | undefined> {
+  async getUser(id: string): Promise<User | undefined> {
     const { data, error } = await supabase
       .from('users')
       .select('*')
@@ -115,11 +100,10 @@ export class SupabaseStorage implements IStorage {
         ...insertUser,
         streak: 0,
         xp: 0,
-        dailyGoal: 10,
-        dailyProgress: 0,
-        isAdmin: false,
-        lastStudied: null,
-        createdAt: new Date().toISOString()
+        daily_goal: 20,
+        daily_progress: 0,
+        is_admin: false,
+        last_studied: null,
       })
       .select()
       .single();
@@ -131,7 +115,7 @@ export class SupabaseStorage implements IStorage {
     return data as User;
   }
   
-  async updateUser(id: number, data: Partial<User>): Promise<User | undefined> {
+  async updateUser(id: string, data: Partial<User>): Promise<User | undefined> {
     const { data: updatedUser, error } = await supabase
       .from('users')
       .update(data)
@@ -149,8 +133,7 @@ export class SupabaseStorage implements IStorage {
       .from('decks')
       .insert({
         ...deck,
-        cardCount: 0,
-        createdAt: new Date().toISOString()
+        card_count: 0,
       })
       .select()
       .single();
@@ -173,11 +156,11 @@ export class SupabaseStorage implements IStorage {
     return data as Deck;
   }
   
-  async getDecksByUserId(userId: number): Promise<Deck[]> {
+  async getDecksByUserId(userId: string): Promise<Deck[]> {
     const { data, error } = await supabase
       .from('decks')
       .select('*')
-      .eq('userId', userId);
+      .eq('user_id', userId);
       
     if (error || !data) return [];
     return data as Deck[];
@@ -187,7 +170,7 @@ export class SupabaseStorage implements IStorage {
     const { data, error } = await supabase
       .from('decks')
       .select('*')
-      .eq('isPublic', true);
+      .eq('is_public', true);
       
     if (error || !data) return [];
     return data as Deck[];
@@ -216,22 +199,15 @@ export class SupabaseStorage implements IStorage {
   
   // Flashcard methods
   async createFlashcard(flashcard: InsertFlashcard): Promise<Flashcard> {
-    // First insert the flashcard
     const { data, error } = await supabase
       .from('flashcards')
-      .insert({
-        ...flashcard,
-        createdAt: new Date().toISOString()
-      })
+      .insert(flashcard)
       .select()
       .single();
       
     if (error || !data) {
       throw new Error(`Failed to create flashcard: ${error?.message || 'Unknown error'}`);
     }
-    
-    // Then update the deck card count
-    await supabase.rpc('increment_deck_card_count', { deck_id: flashcard.deckId });
     
     return data as Flashcard;
   }
@@ -251,7 +227,7 @@ export class SupabaseStorage implements IStorage {
     const { data, error } = await supabase
       .from('flashcards')
       .select('*')
-      .eq('deckId', deckId);
+      .eq('deck_id', deckId);
       
     if (error || !data) return [];
     return data as Flashcard[];
@@ -270,27 +246,12 @@ export class SupabaseStorage implements IStorage {
   }
   
   async deleteFlashcard(id: number): Promise<boolean> {
-    // First get the flashcard to know its deck
-    const { data: flashcard, error: getError } = await supabase
-      .from('flashcards')
-      .select('deckId')
-      .eq('id', id)
-      .single();
-      
-    if (getError || !flashcard) return false;
-    
-    // Delete the flashcard
     const { error } = await supabase
       .from('flashcards')
       .delete()
       .eq('id', id);
       
-    if (error) return false;
-    
-    // Update the deck card count
-    await supabase.rpc('decrement_deck_card_count', { deck_id: flashcard.deckId });
-    
-    return true;
+    return !error;
   }
   
   // Progress methods
@@ -300,7 +261,7 @@ export class SupabaseStorage implements IStorage {
       .insert({
         ...progress,
         repetitions: 0,
-        lastReviewed: new Date().toISOString()
+        last_reviewed: new Date().toISOString()
       })
       .select()
       .single();
@@ -312,44 +273,44 @@ export class SupabaseStorage implements IStorage {
     return data as UserFlashcardProgress;
   }
   
-  async getUserFlashcardProgress(userId: number, flashcardId: number): Promise<UserFlashcardProgress | undefined> {
+  async getUserFlashcardProgress(userId: string, flashcardId: number): Promise<UserFlashcardProgress | undefined> {
     const { data, error } = await supabase
       .from('user_flashcard_progress')
       .select('*')
-      .eq('userId', userId)
-      .eq('flashcardId', flashcardId)
+      .eq('user_id', userId)
+      .eq('flashcard_id', flashcardId)
       .single();
       
     if (error || !data) return undefined;
     return data as UserFlashcardProgress;
   }
   
-  async getDueFlashcards(userId: number): Promise<{ flashcard: Flashcard, progress: UserFlashcardProgress }[]> {
-    const now = new Date().toISOString();
-    
+  async getDueFlashcards(userId: string): Promise<{ flashcard: Flashcard, progress: UserFlashcardProgress }[]> {
     const { data, error } = await supabase
       .from('user_flashcard_progress')
       .select(`
         *,
-        flashcard:flashcards(*)
+        flashcards (*)
       `)
-      .eq('userId', userId)
-      .lte('nextReview', now);
+      .eq('user_id', userId)
+      .lte('next_review', new Date().toISOString());
       
     if (error || !data) return [];
     
-    return data.map(item => ({
+    return data.map((item: any) => ({
+      flashcard: item.flashcards,
       progress: {
         id: item.id,
-        userId: item.userId,
-        flashcardId: item.flashcardId,
-        eFactor: item.eFactor,
-        interval: item.interval,
+        user_id: item.user_id,
+        flashcard_id: item.flashcard_id,
+        e_factor: item.e_factor,
+        interval_days: item.interval_days,
         repetitions: item.repetitions,
-        nextReview: item.nextReview ? new Date(item.nextReview) : null,
-        lastReviewed: item.lastReviewed ? new Date(item.lastReviewed) : null
-      } as UserFlashcardProgress,
-      flashcard: item.flashcard as Flashcard
+        next_review: item.next_review,
+        last_reviewed: item.last_reviewed,
+        created_at: item.created_at,
+        updated_at: item.updated_at,
+      }
     }));
   }
   
@@ -369,10 +330,7 @@ export class SupabaseStorage implements IStorage {
   async createQuizAttempt(attempt: InsertQuizAttempt): Promise<QuizAttempt> {
     const { data, error } = await supabase
       .from('quiz_attempts')
-      .insert({
-        ...attempt,
-        date: new Date().toISOString()
-      })
+      .insert(attempt)
       .select()
       .single();
       
@@ -383,12 +341,11 @@ export class SupabaseStorage implements IStorage {
     return data as QuizAttempt;
   }
   
-  async getQuizAttemptsByUserId(userId: number): Promise<QuizAttempt[]> {
+  async getQuizAttemptsByUserId(userId: string): Promise<QuizAttempt[]> {
     const { data, error } = await supabase
       .from('quiz_attempts')
       .select('*')
-      .eq('userId', userId)
-      .order('date', { ascending: false });
+      .eq('user_id', userId);
       
     if (error || !data) return [];
     return data as QuizAttempt[];
@@ -398,10 +355,7 @@ export class SupabaseStorage implements IStorage {
   async createProgressStat(stat: InsertProgressStat): Promise<ProgressStat> {
     const { data, error } = await supabase
       .from('progress_stats')
-      .insert({
-        ...stat,
-        date: new Date().toISOString()
-      })
+      .insert(stat)
       .select()
       .single();
       
@@ -412,60 +366,33 @@ export class SupabaseStorage implements IStorage {
     return data as ProgressStat;
   }
   
-  async getUserStats(userId: number): Promise<ProgressStat[]> {
+  async getUserStats(userId: string): Promise<ProgressStat[]> {
     const { data, error } = await supabase
       .from('progress_stats')
       .select('*')
-      .eq('userId', userId)
-      .order('date', { ascending: false });
+      .eq('user_id', userId);
       
     if (error || !data) return [];
     return data as ProgressStat[];
   }
   
-  async updateTodayStats(userId: number, data: Partial<InsertProgressStat>): Promise<ProgressStat | undefined> {
-    // Format today's date for comparison (YYYY-MM-DD)
+  async updateTodayStats(userId: string, data: Partial<InsertProgressStat>): Promise<ProgressStat | undefined> {
     const today = new Date().toISOString().split('T')[0];
     
-    // Try to find today's stat
-    const { data: existingStats, error: findError } = await supabase
+    const { data: updatedStat, error } = await supabase
       .from('progress_stats')
-      .select('*')
-      .eq('userId', userId)
-      .filter('date', 'gte', `${today}T00:00:00`)
-      .filter('date', 'lte', `${today}T23:59:59`);
-    
-    if (findError) return undefined;
-    
-    const todayStat = existingStats && existingStats.length > 0 ? existingStats[0] : null;
-    
-    if (todayStat) {
-      // Update existing stat
-      const updates = {
-        cardsReviewed: (todayStat.cardsReviewed || 0) + (data.cardsReviewed || 0),
-        xpEarned: (todayStat.xpEarned || 0) + (data.xpEarned || 0),
-        timeSpent: (todayStat.timeSpent || 0) + (data.timeSpent || 0),
-        accuracy: data.accuracy || todayStat.accuracy
-      };
+      .upsert({
+        user_id: userId,
+        date: today,
+        ...data,
+      })
+      .select()
+      .single();
       
-      const { data: updatedStat, error: updateError } = await supabase
-        .from('progress_stats')
-        .update(updates)
-        .eq('id', todayStat.id)
-        .select()
-        .single();
-        
-      if (updateError || !updatedStat) return undefined;
-      return updatedStat as ProgressStat;
-    } else {
-      // Create new stat
-      return this.createProgressStat({
-        userId,
-        ...data
-      });
-    }
+    if (error || !updatedStat) return undefined;
+    return updatedStat as ProgressStat;
   }
 }
 
-// Create and export a storage instance
+// Create the storage instance
 export const storage = new SupabaseStorage();

@@ -2,10 +2,97 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { setupAuth } from "./auth";
+import { supabase } from "./supabase";
 import multer from "multer";
 import { parse } from "csv-parse";
-import { insertFlashcardSchema, insertDeckSchema } from "@shared/schema";
+import { InsertFlashcard, InsertDeck, User } from "@shared/types";
 import { z } from "zod";
+
+// Extend Express Request interface to include user property
+declare global {
+  namespace Express {
+    interface Request {
+      user?: User | null;
+    }
+  }
+}
+
+// Basic validation schemas
+const insertDeckSchema = z.object({
+  user_id: z.string().uuid(),
+  name: z.string().min(1),
+  description: z.string().optional(),
+  color: z.string().optional(),
+  is_public: z.boolean().optional(),
+});
+
+const insertFlashcardSchema = z.object({
+  deck_id: z.number(),
+  front: z.string().min(1),
+  back: z.string().min(1),
+  part_of_speech: z.string().optional(),
+  example_sentence: z.string().optional(),
+  audio_url: z.string().optional(),
+});
+
+// Middleware to authenticate with Supabase
+async function authenticateSupabase(req: any, res: any, next: any) {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      req.user = null;
+      return next();
+    }
+
+    const token = authHeader.substring(7);
+    
+    // Verify the token with Supabase
+    const { data: { user }, error } = await supabase.auth.getUser(token);
+
+    if (error || !user) {
+      req.user = null;
+      return next();
+    }
+
+    // Get user data from our users table
+    const { data: userData, error: userError } = await supabase
+      .from('users')
+      .select('*')
+      .eq('id', user.id)
+      .single();
+
+    if (userError && userError.code !== 'PGRST116') { // PGRST116 is "not found"
+      console.error("Error fetching user data:", userError);
+    }
+
+    // Set user data
+    req.user = {
+      id: user.id,
+      username: userData?.username || user.user_metadata?.username || user.email?.split('@')[0],
+      email: user.email,
+      name: userData?.name || user.user_metadata?.display_name || user.user_metadata?.username,
+      streak: userData?.streak || 0,
+      xp: userData?.xp || 0,
+      daily_goal: userData?.daily_goal || 20,
+      daily_progress: userData?.daily_progress || 0,
+      is_admin: userData?.is_admin || false,
+      last_studied: userData?.last_studied || null,
+      created_at: userData?.created_at || user.created_at,
+      updated_at: userData?.updated_at || user.created_at,
+    };
+    
+    next();
+  } catch (error) {
+    console.error("Auth middleware error:", error);
+    req.user = null;
+    next();
+  }
+}
+
+// Helper function to check if user is authenticated
+function isAuthenticated(req: any) {
+  return req.user !== null && req.user !== undefined;
+}
 
 // Set up multer for file uploads
 const upload = multer({ 
@@ -29,6 +116,9 @@ const parseCSV = (csvData: string): Promise<any[]> => {
 };
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  // Add Supabase auth middleware to all routes
+  app.use(authenticateSupabase);
+  
   // Setup authentication routes
   setupAuth(app);
 
@@ -37,7 +127,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Deck routes
   app.get("/api/decks", async (req, res) => {
-    if (!req.isAuthenticated()) {
+    if (!isAuthenticated(req)) {
       return res.status(401).json({ message: "Not authenticated" });
     }
     
@@ -62,12 +152,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
     
     // Non-authenticated users can only view public decks
-    if (!req.isAuthenticated() && !deck.isPublic) {
+    if (!isAuthenticated(req) && !deck.is_public) {
       return res.status(403).json({ message: "Not authorized" });
     }
     
     // Authenticated users can only view their own decks or public decks
-    if (req.isAuthenticated() && deck.userId !== req.user!.id && !deck.isPublic) {
+    if (isAuthenticated(req) && deck.user_id !== req.user!.id && !deck.is_public) {
       return res.status(403).json({ message: "Not authorized" });
     }
     
@@ -75,28 +165,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
   
   app.post("/api/decks", async (req, res) => {
-    if (!req.isAuthenticated()) {
+    if (!isAuthenticated(req)) {
       return res.status(401).json({ message: "Not authenticated" });
     }
     
     try {
       const deckData = insertDeckSchema.parse({
         ...req.body,
-        userId: req.user!.id
+        user_id: req.user!.id
       });
       
+      console.log("Creating deck with data:", deckData);
       const deck = await storage.createDeck(deckData);
       res.status(201).json(deck);
     } catch (error) {
+      console.error("Deck creation error:", error);
       if (error instanceof z.ZodError) {
         return res.status(400).json({ message: "Invalid deck data", errors: error.errors });
       }
-      res.status(500).json({ message: "Failed to create deck" });
+      res.status(500).json({ 
+        message: "Failed to create deck", 
+        error: error instanceof Error ? error.message : "Unknown error" 
+      });
     }
   });
   
   app.put("/api/decks/:id", async (req, res) => {
-    if (!req.isAuthenticated()) {
+    if (!isAuthenticated(req)) {
       return res.status(401).json({ message: "Not authenticated" });
     }
     
@@ -111,7 +206,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
     
     // Only the owner can update the deck
-    if (deck.userId !== req.user!.id) {
+    if (deck.user_id !== req.user!.id) {
       return res.status(403).json({ message: "Not authorized" });
     }
     
@@ -124,7 +219,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
   
   app.delete("/api/decks/:id", async (req, res) => {
-    if (!req.isAuthenticated()) {
+    if (!isAuthenticated(req)) {
       return res.status(401).json({ message: "Not authenticated" });
     }
     
@@ -139,7 +234,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
     
     // Only the owner can delete the deck
-    if (deck.userId !== req.user!.id) {
+    if (deck.user_id !== req.user!.id) {
       return res.status(403).json({ message: "Not authorized" });
     }
     
@@ -164,12 +259,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
     
     // Non-authenticated users can only view flashcards from public decks
-    if (!req.isAuthenticated() && !deck.isPublic) {
+    if (!isAuthenticated(req) && !deck.is_public) {
       return res.status(403).json({ message: "Not authorized" });
     }
     
     // Authenticated users can only view flashcards from their own decks or public decks
-    if (req.isAuthenticated() && deck.userId !== req.user!.id && !deck.isPublic) {
+    if (isAuthenticated(req) && deck.user_id !== req.user!.id && !deck.is_public) {
       return res.status(403).json({ message: "Not authorized" });
     }
     
@@ -178,7 +273,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
   
   app.post("/api/decks/:deckId/flashcards", async (req, res) => {
-    if (!req.isAuthenticated()) {
+    if (!isAuthenticated(req)) {
       return res.status(401).json({ message: "Not authenticated" });
     }
     
@@ -193,14 +288,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
     
     // Only the deck owner can add flashcards
-    if (deck.userId !== req.user!.id) {
+    if (deck.user_id !== req.user!.id) {
       return res.status(403).json({ message: "Not authorized" });
     }
     
     try {
       const flashcardData = insertFlashcardSchema.parse({
         ...req.body,
-        deckId
+        deck_id: deckId
       });
       
       const flashcard = await storage.createFlashcard(flashcardData);
@@ -214,7 +309,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
   
   app.put("/api/flashcards/:id", async (req, res) => {
-    if (!req.isAuthenticated()) {
+    if (!isAuthenticated(req)) {
       return res.status(401).json({ message: "Not authenticated" });
     }
     
@@ -229,8 +324,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
     
     // Only the deck owner can update flashcards
-    const deck = await storage.getDeck(flashcard.deckId);
-    if (deck && deck.userId !== req.user!.id) {
+    const deck = await storage.getDeck(flashcard.deck_id);
+    if (deck && deck.user_id !== req.user!.id) {
       return res.status(403).json({ message: "Not authorized" });
     }
     
@@ -243,7 +338,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
   
   app.delete("/api/flashcards/:id", async (req, res) => {
-    if (!req.isAuthenticated()) {
+    if (!isAuthenticated(req)) {
       return res.status(401).json({ message: "Not authenticated" });
     }
     
@@ -258,8 +353,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
     
     // Only the deck owner can delete flashcards
-    const deck = await storage.getDeck(flashcard.deckId);
-    if (deck && deck.userId !== req.user!.id) {
+    const deck = await storage.getDeck(flashcard.deck_id);
+    if (deck && deck.user_id !== req.user!.id) {
       return res.status(403).json({ message: "Not authorized" });
     }
     
@@ -273,7 +368,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   
   // CSV Upload route
   app.post("/api/decks/:deckId/upload-csv", upload.single("csvFile"), async (req, res) => {
-    if (!req.isAuthenticated()) {
+    if (!isAuthenticated(req)) {
       return res.status(401).json({ message: "Not authenticated" });
     }
     
@@ -288,7 +383,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
     
     // Only the deck owner can upload flashcards
-    if (deck.userId !== req.user!.id) {
+    if (deck.user_id !== req.user!.id) {
       return res.status(403).json({ message: "Not authorized" });
     }
     
@@ -316,12 +411,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
           
           await storage.createFlashcard({
-            deckId,
+            deck_id: deckId,
             front: record.front,
             back: record.back,
-            partOfSpeech: record.partOfSpeech || null,
-            exampleSentence: record.exampleSentence || null,
-            audioUrl: record.audioUrl || null
+            part_of_speech: record.part_of_speech || null,
+            example_sentence: record.example_sentence || null,
+            audio_url: record.audio_url || null
           });
           
           results.success++;
@@ -340,7 +435,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   
   // Study routes
   app.get("/api/study/due", async (req, res) => {
-    if (!req.isAuthenticated()) {
+    if (!isAuthenticated(req)) {
       return res.status(401).json({ message: "Not authenticated" });
     }
     
@@ -353,7 +448,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
   
   app.post("/api/study/progress", async (req, res) => {
-    if (!req.isAuthenticated()) {
+    if (!isAuthenticated(req)) {
       return res.status(401).json({ message: "Not authenticated" });
     }
     
@@ -369,17 +464,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // If no progress exists for this flashcard yet, create it
       if (!progress) {
         progress = await storage.createUserFlashcardProgress({
-          userId: req.user!.id,
-          flashcardId,
-          eFactor: 250, // 2.5 * 100
+          user_id: req.user!.id,
+          flashcard_id: flashcardId,
+          e_factor: 250, // 2.5 * 100
           interval: 0,
           repetitions: 0,
-          nextReview: new Date()
+          next_review: new Date()
         });
       }
       
       // Apply spaced repetition algorithm (SM-2)
-      const oldEFactor = progress.eFactor / 100; // Convert to decimal
+      const oldEFactor = progress.e_factor / 100; // Convert to decimal
       const newRepetitions = quality < 3 ? 0 : progress.repetitions + 1;
       
       // Calculate new eFactor (minimum 1.3)
@@ -403,26 +498,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // Update progress
       const updatedProgress = await storage.updateUserFlashcardProgress(progress.id, {
-        eFactor: Math.round(newEFactor * 100),
+        e_factor: Math.round(newEFactor * 100),
         interval: newInterval,
         repetitions: newRepetitions,
-        nextReview,
-        lastReviewed: new Date()
+        next_review: nextReview,
+        last_reviewed: new Date()
       });
       
       // Update user's daily progress and last studied date
       const user = await storage.getUser(req.user!.id);
       if (user) {
         await storage.updateUser(user.id, {
-          dailyProgress: user.dailyProgress + 1,
-          lastStudied: new Date()
+          daily_progress: user.daily_progress + 1,
+          last_studied: new Date()
         });
         
         // Update today's stats
         await storage.updateTodayStats(user.id, {
-          cardsReviewed: 1,
-          xpEarned: quality >= 3 ? 10 : 5, // More XP for correct answers
-          timeSpent: 10 // Assuming 10 seconds per card for now
+          cards_reviewed: 1,
+          xp_earned: quality >= 3 ? 10 : 5, // More XP for correct answers
+          time_spent: 10 // Assuming 10 seconds per card for now
         });
       }
       
@@ -434,7 +529,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   
   // Quiz routes
   app.post("/api/quizzes/submit", async (req, res) => {
-    if (!req.isAuthenticated()) {
+    if (!isAuthenticated(req)) {
       return res.status(401).json({ message: "Not authenticated" });
     }
     
@@ -446,8 +541,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     
     try {
       const quizAttempt = await storage.createQuizAttempt({
-        userId: req.user!.id,
-        deckId,
+        user_id: req.user!.id,
+        deck_id: deckId,
         quizType,
         score,
         totalQuestions
@@ -460,16 +555,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         
         await storage.updateUser(user.id, {
           xp: user.xp + xpEarned,
-          lastStudied: new Date()
+          last_studied: new Date()
         });
         
         // Update accuracy stats
-        const accuracy = {};
+        const accuracy: Record<string, number> = {};
         accuracy[quizType] = Math.round((score / totalQuestions) * 100);
         
         // Update today's stats
         await storage.updateTodayStats(user.id, {
-          xpEarned,
+          xp_earned: xpEarned,
           accuracy
         });
       }
@@ -481,7 +576,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
   
   app.get("/api/quizzes/history", async (req, res) => {
-    if (!req.isAuthenticated()) {
+    if (!isAuthenticated(req)) {
       return res.status(401).json({ message: "Not authenticated" });
     }
     
@@ -495,7 +590,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   
   // User stats routes
   app.get("/api/stats", async (req, res) => {
-    if (!req.isAuthenticated()) {
+    if (!isAuthenticated(req)) {
       return res.status(401).json({ message: "Not authenticated" });
     }
     
@@ -509,7 +604,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   
   // Streak management route
   app.post("/api/streak/check", async (req, res) => {
-    if (!req.isAuthenticated()) {
+    if (!isAuthenticated(req)) {
       return res.status(401).json({ message: "Not authenticated" });
     }
     
@@ -520,11 +615,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       const now = new Date();
-      const lastStudied = user.lastStudied;
+      const lastStudied = user.last_studied;
       
       if (!lastStudied) {
         // First time studying, set streak to 1
-        await storage.updateUser(user.id, { streak: 1, lastStudied: now });
+        await storage.updateUser(user.id, { streak: 1, last_studied: now });
         return res.json({ streak: 1, streakUpdated: true });
       }
       
@@ -545,11 +640,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } else if (lastStudiedDate.getTime() === yesterday.getTime()) {
         // Studied yesterday, increment streak
         const newStreak = user.streak + 1;
-        await storage.updateUser(user.id, { streak: newStreak, lastStudied: now });
+        await storage.updateUser(user.id, { streak: newStreak, last_studied: now });
         return res.json({ streak: newStreak, streakUpdated: true });
       } else {
         // Streak broken, reset to 1
-        await storage.updateUser(user.id, { streak: 1, lastStudied: now });
+        await storage.updateUser(user.id, { streak: 1, last_studied: now });
         return res.json({ streak: 1, streakUpdated: true, streakBroken: true });
       }
     } catch (error) {
@@ -557,64 +652,66 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
   
-  // Admin routes
+  // Admin routes - simplified to avoid storage interface issues
   app.get("/api/admin/users", async (req, res) => {
-    if (!req.isAuthenticated() || !req.user!.isAdmin) {
+    if (!isAuthenticated(req) || !req.user!.is_admin) {
       return res.status(403).json({ message: "Not authorized" });
     }
     
     try {
-      const users = Array.from(storage.users.values()).map(user => {
-        // Don't send passwords
-        const { password, ...userWithoutPassword } = user;
-        return userWithoutPassword;
-      });
+      // Query users from Supabase directly
+      const { data: users, error } = await supabase
+        .from('users')
+        .select('*');
       
-      res.json(users);
+      if (error) throw error;
+      res.json(users || []);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch users" });
     }
   });
   
   app.put("/api/admin/users/:id", async (req, res) => {
-    if (!req.isAuthenticated() || !req.user!.isAdmin) {
+    if (!isAuthenticated(req) || !req.user!.is_admin) {
       return res.status(403).json({ message: "Not authorized" });
     }
     
-    const userId = parseInt(req.params.id);
-    if (isNaN(userId)) {
-      return res.status(400).json({ message: "Invalid user ID" });
-    }
+    const userId = req.params.id;
     
     try {
-      const updatedUser = await storage.updateUser(userId, req.body);
-      if (!updatedUser) {
-        return res.status(404).json({ message: "User not found" });
-      }
+      const { data: updatedUser, error } = await supabase
+        .from('users')
+        .update(req.body)
+        .eq('id', userId)
+        .select()
+        .single();
       
-      // Don't send password
-      const { password, ...userWithoutPassword } = updatedUser;
-      res.json(userWithoutPassword);
+      if (error) throw error;
+      res.json(updatedUser);
     } catch (error) {
       res.status(500).json({ message: "Failed to update user" });
     }
   });
   
   app.get("/api/admin/decks", async (req, res) => {
-    if (!req.isAuthenticated() || !req.user!.isAdmin) {
+    if (!isAuthenticated(req) || !req.user!.is_admin) {
       return res.status(403).json({ message: "Not authorized" });
     }
     
     try {
-      const decks = Array.from(storage.decks.values());
-      res.json(decks);
+      const { data: decks, error } = await supabase
+        .from('decks')
+        .select('*');
+      
+      if (error) throw error;
+      res.json(decks || []);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch decks" });
     }
   });
   
   app.put("/api/admin/decks/:id", async (req, res) => {
-    if (!req.isAuthenticated() || !req.user!.isAdmin) {
+    if (!isAuthenticated(req) || !req.user!.is_admin) {
       return res.status(403).json({ message: "Not authorized" });
     }
     
@@ -624,11 +721,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
     
     try {
-      const updatedDeck = await storage.updateDeck(deckId, req.body);
-      if (!updatedDeck) {
-        return res.status(404).json({ message: "Deck not found" });
-      }
+      const { data: updatedDeck, error } = await supabase
+        .from('decks')
+        .update(req.body)
+        .eq('id', deckId)
+        .select()
+        .single();
       
+      if (error) throw error;
       res.json(updatedDeck);
     } catch (error) {
       res.status(500).json({ message: "Failed to update deck" });

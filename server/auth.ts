@@ -1,256 +1,186 @@
-import passport from "passport";
-import { Strategy as LocalStrategy } from "passport-local";
 import { Express } from "express";
-import session from "express-session";
-import { scrypt, randomBytes, timingSafeEqual } from "crypto";
-import { promisify } from "util";
-import { storage } from "./storage";
-import { User as SelectUser } from "@shared/schema";
 import { supabase } from "./supabase";
 
-declare global {
-  namespace Express {
-    interface User extends SelectUser {}
-  }
-}
-
-const scryptAsync = promisify(scrypt);
-
-async function hashPassword(password: string) {
-  const salt = randomBytes(16).toString("hex");
-  const buf = (await scryptAsync(password, salt, 64)) as Buffer;
-  return `${buf.toString("hex")}.${salt}`;
-}
-
-async function comparePasswords(supplied: string, stored: string) {
-  const [hashed, salt] = stored.split(".");
-  const hashedBuf = Buffer.from(hashed, "hex");
-  const suppliedBuf = (await scryptAsync(supplied, salt, 64)) as Buffer;
-  return timingSafeEqual(hashedBuf, suppliedBuf);
-}
-
 export function setupAuth(app: Express) {
-  const sessionSettings: session.SessionOptions = {
-    secret: process.env.SESSION_SECRET || "flashlearn-secret-key",
-    resave: false,
-    saveUninitialized: false,
-    store: storage.sessionStore,
-    cookie: {
-      maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
-    }
-  };
-
-  app.set("trust proxy", 1);
-  app.use(session(sessionSettings));
-  app.use(passport.initialize());
-  app.use(passport.session());
-
-  // Check if the table exists in Supabase
-  async function checkTablesExistence() {
+  // Register endpoint
+  app.post("/api/register", async (req, res) => {
     try {
-      // Try to query the users table
-      const { error } = await supabase.from('users').select('id').limit(1);
+      const { username, email, password } = req.body;
       
-      // If we get a specific error about the table not existing, create tables
-      if (error && error.message.includes('relation "users" does not exist')) {
-        console.log('Tables do not exist, initializing mock auth');
-        return false;
+      if (!username || !email || !password) {
+        return res.status(400).json({ 
+          message: "Username, email and password are required" 
+        });
       }
-      
-      return !error;
-    } catch (err) {
-      console.error('Error checking tables:', err);
-      return false;
-    }
-  }
 
-  // Initially, we'll use a combination approach - we'll check if Supabase tables exist,
-  // but fallback to mock authentication if needed
-  checkTablesExistence().then(tablesExist => {
-    console.log(`Using ${tablesExist ? 'Supabase' : 'mock'} authentication`);
+      // Register user with Supabase Auth
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: {
+            username,
+            display_name: username,
+          }
+        }
+      });
+
+      if (error) {
+        console.error("Supabase signup error:", error);
+        return res.status(400).json({ message: error.message });
+      }
+
+      if (!data.user || !data.session) {
+        return res.status(400).json({ message: "Registration failed" });
+      }
+
+      // Return user data with session token
+      res.status(201).json({
+        id: data.user.id,
+        username,
+        email: data.user.email,
+        name: username,
+        streak: 0,
+        xp: 0,
+        daily_goal: 20,
+        daily_progress: 0,
+        is_admin: false,
+        last_studied: null,
+        created_at: new Date(),
+        updated_at: new Date(),
+        session: data.session,
+      });
+    } catch (error) {
+      console.error("Registration error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
   });
 
-  // Authentication strategy
-  passport.use(
-    new LocalStrategy(async (username, password, done) => {
-      try {
-        // First try to get the user from Supabase
-        const { data: user, error } = await supabase
-          .from('users')
-          .select('*')
-          .eq('username', username)
-          .single();
-        
-        // If user exists and password matches, use the user
-        if (user && await comparePasswords(password, user.password)) {
-          return done(null, user as SelectUser);
-        }
-        
-        // If Supabase query failed or user not found, fall back to mock user
-        // For development, create a mock user with any credentials
-        const mockUser: SelectUser = {
-          id: 1,
-          username: username,
-          name: username,
-          password: "hashed-password", // Not used in mock
-          streak: 3,
-          xp: 250,
-          dailyGoal: 20,
-          dailyProgress: 5,
-          isAdmin: true,
-          lastStudied: new Date(),
-          createdAt: new Date()
-        };
-        return done(null, mockUser);
-      } catch (err) {
-        return done(err);
-      }
-    }),
-  );
-
-  passport.serializeUser((user, done) => done(null, user.id));
-  passport.deserializeUser(async (id: number, done) => {
+  // Login endpoint
+  app.post("/api/login", async (req, res) => {
     try {
-      // Try to get user from Supabase first
-      const { data: user, error } = await supabase
+      const { email, password } = req.body;
+      
+      if (!email || !password) {
+        return res.status(400).json({ 
+          message: "Email and password are required" 
+        });
+      }
+
+      // Sign in with Supabase Auth
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+
+      if (error) {
+        console.error("Supabase login error:", error);
+        return res.status(401).json({ message: "Invalid email or password" });
+      }
+
+      if (!data.user || !data.session) {
+        return res.status(401).json({ message: "Login failed" });
+      }
+
+      // Get user data from our users table
+      const { data: userData, error: userError } = await supabase
         .from('users')
         .select('*')
-        .eq('id', id)
+        .eq('id', data.user.id)
         .single();
       
-      if (user) {
-        return done(null, user as SelectUser);
+      if (userError && userError.code !== 'PGRST116') { // PGRST116 is "not found"
+        console.error("Error fetching user data:", userError);
       }
-      
-      // Fallback to mock user if not found
-      const mockUser: SelectUser = {
-        id: 1,
-        username: "testuser",
-        name: "Test User",
-        password: "hashed-password", // Not used in mock
-        streak: 3,
-        xp: 250,
-        dailyGoal: 20,
-        dailyProgress: 5,
-        isAdmin: true,
-        lastStudied: new Date(),
-        createdAt: new Date()
-      };
-      done(null, mockUser);
-    } catch (err) {
-      done(err);
-    }
-  });
 
-  app.post("/api/register", async (req, res, next) => {
-    try {
-      // Check if user already exists
-      const { data: existingUser, error: checkError } = await supabase
-        .from('users')
-        .select('username')
-        .eq('username', req.body.username)
-        .single();
-      
-      if (existingUser) {
-        return res.status(400).json({ message: "Username already exists" });
-      }
-      
-      // Hash the password
-      const hashedPassword = await hashPassword(req.body.password);
-      
-      // Try to insert the user into Supabase
-      const { data: newUser, error } = await supabase
-        .from('users')
-        .insert({
-          username: req.body.username,
-          name: req.body.name || req.body.username,
-          password: hashedPassword,
-          streak: 0,
-          xp: 0,
-          dailyGoal: 20,
-          dailyProgress: 0,
-          isAdmin: false,
-          lastStudied: null,
-          createdAt: new Date().toISOString()
-        })
-        .select()
-        .single();
-      
-      if (error) {
-        // If Supabase insertion fails, fall back to mock user
-        const mockUser: SelectUser = {
-          id: 1,
-          username: req.body.username,
-          name: req.body.name || req.body.username,
-          password: hashedPassword,
-          streak: 0,
-          xp: 0,
-          dailyGoal: 20,
-          dailyProgress: 0,
-          isAdmin: false,
-          lastStudied: null,
-          createdAt: new Date()
-        };
-        
-        req.login(mockUser, (err) => {
-          if (err) return next(err);
-          // Don't send password back to the client
-          const { password, ...userWithoutPassword } = mockUser;
-          res.status(201).json(userWithoutPassword);
-        });
-      } else {
-        // Use the user from Supabase
-        req.login(newUser as SelectUser, (err) => {
-          if (err) return next(err);
-          // Don't send password back to the client
-          const { password, ...userWithoutPassword } = newUser;
-          res.status(201).json(userWithoutPassword);
-        });
-      }
-    } catch (err) {
-      next(err);
-    }
-  });
-
-  app.post("/api/login", async (req, res, next) => {
-    // We'll use passport's authenticate method which will use our LocalStrategy
-    passport.authenticate('local', (err, user) => {
-      if (err) return next(err);
-      if (!user) return res.status(401).json({ message: "Invalid credentials" });
-      
-      req.login(user, (loginErr) => {
-        if (loginErr) return next(loginErr);
-        // Don't send password back to the client
-        const { password, ...userWithoutPassword } = user;
-        res.status(200).json(userWithoutPassword);
+      // Return user data with session
+      res.json({
+        id: data.user.id,
+        username: userData?.username || data.user.user_metadata?.username || data.user.email?.split('@')[0],
+        email: data.user.email,
+        name: userData?.name || data.user.user_metadata?.display_name || data.user.user_metadata?.username,
+        streak: userData?.streak || 0,
+        xp: userData?.xp || 0,
+        daily_goal: userData?.daily_goal || 20,
+        daily_progress: userData?.daily_progress || 0,
+        is_admin: userData?.is_admin || false,
+        last_studied: userData?.last_studied || null,
+        created_at: userData?.created_at || data.user.created_at,
+        updated_at: userData?.updated_at || data.user.created_at,
+        session: data.session,
       });
-    })(req, res, next);
+    } catch (error) {
+      console.error("Login error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
   });
 
-  app.post("/api/logout", (req, res, next) => {
-    req.logout((err) => {
-      if (err) return next(err);
-      res.sendStatus(200);
-    });
+  // Logout endpoint
+  app.post("/api/logout", async (req, res) => {
+    try {
+      // Get the Authorization header
+      const authHeader = req.headers.authorization;
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        const token = authHeader.substring(7);
+        
+        // Sign out from Supabase
+        await supabase.auth.admin.signOut(token);
+      }
+      
+      res.json({ message: "Logged out successfully" });
+    } catch (error) {
+      console.error("Logout error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
   });
 
-  app.get("/api/user", (req, res) => {
-    if (!req.isAuthenticated()) return res.sendStatus(401);
-    // Don't send password back to the client
-    const { password, ...userWithoutPassword } = req.user!;
-    res.json(userWithoutPassword);
-  });
-  
-  // Middleware to check if user is admin
-  app.use("/api/admin/*", (req, res, next) => {
-    if (!req.isAuthenticated()) {
-      return res.status(401).json({ message: "Not authenticated" });
+  // Get current user endpoint
+  app.get("/api/user", async (req, res) => {
+    try {
+      // Get the Authorization header
+      const authHeader = req.headers.authorization;
+      if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        return res.status(401).json({ message: "No token provided" });
+      }
+
+      const token = authHeader.substring(7);
+      
+      // Verify the token with Supabase
+      const { data: { user }, error } = await supabase.auth.getUser(token);
+
+      if (error || !user) {
+        return res.status(401).json({ message: "Invalid token" });
+      }
+
+      // Get user data from our users table
+      const { data: userData, error: userError } = await supabase
+        .from('users')
+        .select('*')
+        .eq('id', user.id)
+        .single();
+      
+      if (userError && userError.code !== 'PGRST116') { // PGRST116 is "not found"
+        console.error("Error fetching user data:", userError);
+      }
+
+      // Return user data
+      res.json({
+        id: user.id,
+        username: userData?.username || user.user_metadata?.username || user.email?.split('@')[0],
+        email: user.email,
+        name: userData?.name || user.user_metadata?.display_name || user.user_metadata?.username,
+        streak: userData?.streak || 0,
+        xp: userData?.xp || 0,
+        daily_goal: userData?.daily_goal || 20,
+        daily_progress: userData?.daily_progress || 0,
+        is_admin: userData?.is_admin || false,
+        last_studied: userData?.last_studied || null,
+        created_at: userData?.created_at || user.created_at,
+        updated_at: userData?.updated_at || user.created_at,
+      });
+    } catch (error) {
+      console.error("Get user error:", error);
+      res.status(500).json({ message: "Internal server error" });
     }
-    
-    if (!req.user!.isAdmin) {
-      return res.status(403).json({ message: "Not authorized" });
-    }
-    
-    next();
   });
 }

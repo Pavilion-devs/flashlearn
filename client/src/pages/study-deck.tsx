@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { useParams, useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { Flashcard as FlashcardType } from "@shared/schema";
+import { Flashcard as FlashcardType } from "@shared/types";
 import { Sidebar } from "@/components/layout/sidebar";
 import { MobileHeader } from "@/components/layout/header";
 import { MobileNav } from "@/components/layout/mobile-nav";

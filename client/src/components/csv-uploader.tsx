@@ -18,6 +18,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Loader2, Upload, CheckCircle, AlertCircle, FileText, Download } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useQuery } from "@tanstack/react-query";
 
 interface CsvUploaderProps {
   deckId?: number;
@@ -32,16 +33,9 @@ export function CsvUploader({ deckId, onSuccess }: CsvUploaderProps) {
   const [showHelp, setShowHelp] = useState(false);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
-  // Get decks for selection if no deckId provided
-  const { data: decks, isLoading: decksLoading } = useQuery({
+  // Get user's decks (only if deckId is not provided)
+  const { data: decks, isLoading: decksLoading } = useQuery<any[]>({
     queryKey: ["/api/decks"],
-    queryFn: async ({ queryKey }) => {
-      const res = await fetch(queryKey[0] as string, {
-        credentials: "include",
-      });
-      if (!res.ok) throw new Error("Failed to fetch decks");
-      return res.json();
-    },
     enabled: !deckId,
   });
 

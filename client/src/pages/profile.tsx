@@ -5,6 +5,7 @@ import { z } from "zod";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
+import { Link } from "wouter";
 import { Sidebar } from "@/components/layout/sidebar";
 import { MobileHeader } from "@/components/layout/header";
 import { MobileNav } from "@/components/layout/mobile-nav";
@@ -56,7 +57,7 @@ export default function Profile() {
     resolver: zodResolver(profileFormSchema),
     defaultValues: {
       name: user?.name || "",
-      dailyGoal: user?.dailyGoal || 20,
+      dailyGoal: user?.daily_goal || 20,
     },
   });
   
@@ -65,7 +66,7 @@ export default function Profile() {
     if (user) {
       form.reset({
         name: user.name || "",
-        dailyGoal: user.dailyGoal || 20,
+        dailyGoal: user.daily_goal || 20,
       });
     }
   }, [user, form]);
@@ -76,13 +77,6 @@ export default function Profile() {
     isLoading: historyLoading 
   } = useQuery({
     queryKey: ["/api/quizzes/history"],
-    queryFn: async ({ queryKey }) => {
-      const res = await fetch(queryKey[0] as string, {
-        credentials: "include",
-      });
-      if (!res.ok) throw new Error("Failed to fetch quiz history");
-      return await res.json();
-    },
   });
   
   // Fetch stats
@@ -91,13 +85,6 @@ export default function Profile() {
     isLoading: statsLoading 
   } = useQuery({
     queryKey: ["/api/stats"],
-    queryFn: async ({ queryKey }) => {
-      const res = await fetch(queryKey[0] as string, {
-        credentials: "include",
-      });
-      if (!res.ok) throw new Error("Failed to fetch stats");
-      return await res.json();
-    },
   });
   
   // Update profile mutation
@@ -152,7 +139,7 @@ export default function Profile() {
   };
   
   // Format date
-  const formatDate = (dateString: string) => {
+  const formatDate = (dateString?: string) => {
     if (!dateString) return "N/A";
     return new Date(dateString).toLocaleDateString('en-US', {
       year: 'numeric',
@@ -163,7 +150,7 @@ export default function Profile() {
   
   // Calculate stats
   const getStats = () => {
-    if (!quizHistory || quizHistory.length === 0) {
+    if (!quizHistory || !Array.isArray(quizHistory) || quizHistory.length === 0) {
       return {
         totalQuizzes: 0,
         avgScore: 0,
@@ -176,7 +163,7 @@ export default function Profile() {
     let bestScore = 0;
     
     quizHistory.forEach((quiz: any) => {
-      const scorePercent = Math.round((quiz.score / quiz.totalQuestions) * 100);
+      const scorePercent = Math.round((quiz.score / quiz.total_questions) * 100);
       totalScorePercent += scorePercent;
       bestScore = Math.max(bestScore, scorePercent);
     });
@@ -200,7 +187,7 @@ export default function Profile() {
         <Sidebar />
         
         <main className="flex-1 overflow-y-auto p-4 md:p-6 bg-neutral-50 pb-16 md:pb-6">
-          <div className="max-w-4xl mx-auto">
+          <div className="mx-auto">
             <div className="mb-6">
               <h1 className="text-2xl md:text-3xl font-poppins font-semibold mb-1">
                 User Profile
@@ -266,7 +253,7 @@ export default function Profile() {
                               setIsEditing(false);
                               form.reset({
                                 name: user?.name || "",
-                                dailyGoal: user?.dailyGoal || 20,
+                                dailyGoal: user?.daily_goal || 20,
                               });
                             }}
                           >
@@ -314,7 +301,7 @@ export default function Profile() {
                           <Calendar className="h-4 w-4 text-neutral-500 mr-2" />
                           <span className="text-sm text-neutral-500">Member Since:</span>
                         </div>
-                        <span className="font-medium">{formatDate(user?.createdAt)}</span>
+                        <span className="font-medium">{formatDate(user?.created_at)}</span>
                       </div>
                       
                       <div className="flex items-center justify-between border-b pb-3">
@@ -322,7 +309,7 @@ export default function Profile() {
                           <Hash className="h-4 w-4 text-neutral-500 mr-2" />
                           <span className="text-sm text-neutral-500">Daily Goal:</span>
                         </div>
-                        <span className="font-medium">{user?.dailyGoal || 20} flashcards</span>
+                        <span className="font-medium">{user?.daily_goal || 20} flashcards</span>
                       </div>
                       
                       <div className="flex justify-end pt-2">
@@ -439,26 +426,26 @@ export default function Profile() {
                   <div className="flex justify-center p-4">
                     <Loader2 className="h-8 w-8 animate-spin text-primary" />
                   </div>
-                ) : quizHistory && quizHistory.length > 0 ? (
+                ) : quizHistory && Array.isArray(quizHistory) && quizHistory.length > 0 ? (
                   <div className="space-y-4">
                     {quizHistory.slice(0, 5).map((quiz: any, index: number) => (
                       <div key={index} className="flex items-center justify-between border-b pb-3 last:border-0 last:pb-0">
                         <div>
                           <div className="font-medium">
-                            {quiz.quizType === "multiple-choice" ? "Multiple Choice Quiz" :
-                             quiz.quizType === "typing" ? "Typing Quiz" : "Listening Quiz"}
+                            {quiz.quiz_type === "multiple-choice" ? "Multiple Choice Quiz" :
+                             quiz.quiz_type === "typing" ? "Typing Quiz" : "Listening Quiz"}
                           </div>
                           <div className="text-sm text-neutral-500">
-                            {formatDate(quiz.date)}
+                            {formatDate(quiz.created_at)}
                           </div>
                         </div>
                         <div className="flex items-center">
                           <div className="text-right mr-4">
                             <div className="font-medium">
-                              {quiz.score}/{quiz.totalQuestions}
+                              {quiz.score}/{quiz.total_questions}
                             </div>
                             <div className="text-sm text-neutral-500">
-                              {Math.round((quiz.score / quiz.totalQuestions) * 100)}%
+                              {Math.round((quiz.score / quiz.total_questions) * 100)}%
                             </div>
                           </div>
                           <ArrowRight size={16} className="text-neutral-400" />
@@ -469,11 +456,11 @@ export default function Profile() {
                 ) : (
                   <div className="text-center p-6 bg-muted/10 rounded-md">
                     <p className="text-neutral-500">No quiz history available yet. Start practicing to see your activity!</p>
-                    <Button variant="outline" className="mt-4" asChild>
-                      <Link href="/quiz">
-                        <a>Start a Quiz</a>
-                      </Link>
-                    </Button>
+                    <Link href="/quiz">
+                      <Button variant="outline" className="mt-4">
+                        Start a Quiz
+                      </Button>
+                    </Link>
                   </div>
                 )}
               </CardContent>

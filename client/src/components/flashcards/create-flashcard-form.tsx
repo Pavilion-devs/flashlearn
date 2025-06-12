@@ -4,7 +4,7 @@ import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { insertFlashcardSchema } from "@shared/schema";
+import { InsertFlashcard, Deck } from "@shared/types";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent } from "@/components/ui/card";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
@@ -13,15 +13,16 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Loader2, Upload } from "lucide-react";
+import { Label } from "@/components/ui/label";
 
-// Extend the insertFlashcardSchema with custom validation
-const formSchema = insertFlashcardSchema.extend({
-  deckId: z.number({
-    required_error: "Please select a deck",
-    invalid_type_error: "Deck ID must be a number",
-  }),
+// Basic flashcard validation schema
+const flashcardSchema = z.object({
+  deck_id: z.number(),
   front: z.string().min(1, "Front text is required"),
   back: z.string().min(1, "Back text is required"),
+  part_of_speech: z.string().optional(),
+  example_sentence: z.string().optional(),
+  audio_url: z.string().optional(),
 });
 
 export function CreateFlashcardForm() {
@@ -29,35 +30,28 @@ export function CreateFlashcardForm() {
   const [audioFile, setAudioFile] = useState<File | null>(null);
   
   // Get user's decks
-  const { data: decks, isLoading: decksLoading } = useQuery({
+  const { data: decks, isLoading: decksLoading } = useQuery<Deck[]>({
     queryKey: ["/api/decks"],
-    queryFn: async ({ queryKey }) => {
-      const res = await fetch(queryKey[0] as string, {
-        credentials: "include",
-      });
-      if (!res.ok) throw new Error("Failed to fetch decks");
-      return res.json();
-    },
   });
   
   // Define form
-  const form = useForm<z.infer<typeof formSchema>>({
-    resolver: zodResolver(formSchema),
+  const form = useForm<z.infer<typeof flashcardSchema>>({
+    resolver: zodResolver(flashcardSchema),
     defaultValues: {
-      deckId: undefined,
+      deck_id: undefined,
       front: "",
       back: "",
-      partOfSpeech: "",
-      exampleSentence: "",
-      audioUrl: "",
+      part_of_speech: "",
+      example_sentence: "",
+      audio_url: "",
     },
   });
   
   // Create flashcard mutation
   const createFlashcard = useMutation({
-    mutationFn: async (values: z.infer<typeof formSchema>) => {
+    mutationFn: async (values: z.infer<typeof flashcardSchema>) => {
       // Handle audio upload if present
-      let audioUrl = values.audioUrl;
+      let audioUrl = values.audio_url;
       
       if (audioFile) {
         // In a real app, we would implement file upload to a storage service
@@ -67,12 +61,12 @@ export function CreateFlashcardForm() {
       
       const flashcardData = {
         ...values,
-        audioUrl,
+        audio_url: audioUrl,
       };
       
       const res = await apiRequest(
         "POST", 
-        `/api/decks/${values.deckId}/flashcards`, 
+        `/api/decks/${values.deck_id}/flashcards`, 
         flashcardData
       );
       
@@ -86,12 +80,12 @@ export function CreateFlashcardForm() {
       
       // Reset form
       form.reset({
-        deckId: form.getValues().deckId, // Keep the selected deck
+        deck_id: form.getValues().deck_id, // Keep the selected deck
         front: "",
         back: "",
-        partOfSpeech: "",
-        exampleSentence: "",
-        audioUrl: "",
+        part_of_speech: "",
+        example_sentence: "",
+        audio_url: "",
       });
       
       setAudioFile(null);
@@ -108,7 +102,7 @@ export function CreateFlashcardForm() {
     },
   });
   
-  const onSubmit = (values: z.infer<typeof formSchema>) => {
+  const onSubmit = (values: z.infer<typeof flashcardSchema>) => {
     createFlashcard.mutate(values);
   };
   
@@ -152,13 +146,13 @@ export function CreateFlashcardForm() {
                   
                   <FormField
                     control={form.control}
-                    name="partOfSpeech"
+                    name="part_of_speech"
                     render={({ field }) => (
                       <FormItem>
                         <FormLabel>Part of Speech (Optional)</FormLabel>
                         <Select
-                          onValueChange={field.onChange}
-                          defaultValue={field.value}
+                          onValueChange={(value) => field.onChange(value === "none" ? "" : value)}
+                          defaultValue={field.value || "none"}
                         >
                           <FormControl>
                             <SelectTrigger>
@@ -166,7 +160,7 @@ export function CreateFlashcardForm() {
                             </SelectTrigger>
                           </FormControl>
                           <SelectContent>
-                            <SelectItem value="">None</SelectItem>
+                            <SelectItem value="none">None</SelectItem>
                             <SelectItem value="noun">Noun</SelectItem>
                             <SelectItem value="verb">Verb</SelectItem>
                             <SelectItem value="adjective">Adjective</SelectItem>
@@ -229,7 +223,7 @@ export function CreateFlashcardForm() {
                   
                   <FormField
                     control={form.control}
-                    name="exampleSentence"
+                    name="example_sentence"
                     render={({ field }) => (
                       <FormItem>
                         <FormLabel>Example Sentence (Optional)</FormLabel>
@@ -251,7 +245,7 @@ export function CreateFlashcardForm() {
             <div className="border-t border-neutral-200 pt-6">
               <FormField
                 control={form.control}
-                name="deckId"
+                name="deck_id"
                 render={({ field }) => (
                   <FormItem className="mb-4">
                     <FormLabel>Add to Deck</FormLabel>

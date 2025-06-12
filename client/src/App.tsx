@@ -27,6 +27,13 @@ function RouterWithAuth() {
     }
   }, [user, isLoading, location, setLocation]);
 
+  // Redirect to dashboard if logged in and on auth page
+  useEffect(() => {
+    if (!isLoading && user && location === "/auth") {
+      setLocation("/");
+    }
+  }, [user, isLoading, location, setLocation]);
+
   return (
     <Switch>
       <Route path="/" component={Dashboard} />
